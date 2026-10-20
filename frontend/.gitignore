@@ -1,0 +1,65 @@
+# frontend/.gitignore — the Vite app's own ignores.
+#
+# The root .gitignore repeats the essentials so a clone is clean without this file;
+# this one carries the detail for anyone working inside frontend/ alone.
+
+# ---------------------------------------------------------------------------
+# Installed packages and build output
+# ---------------------------------------------------------------------------
+# Reproducible from package.json and package-lock.json, which are both committed.
+node_modules/
+.npm/
+
+# `npm run build` output. The recorded production build is a result in
+# TEST_RESULTS.md, not an artefact to commit.
+dist/
+dist-ssr/
+.vite/
+*.local
+
+# ---------------------------------------------------------------------------
+# Local configuration
+# ---------------------------------------------------------------------------
+# VITE_API_TARGET and VITE_API_BASE are passed in the environment of the dev server
+# (see README.md), so the port a session happens to use is never committed.
+.env
+.env.*
+!.env.example
+
+# ---------------------------------------------------------------------------
+# Test and verification output
+# ---------------------------------------------------------------------------
+coverage/
+.vitest/
+test-results/
+playwright-report/
+blob-report/
+playwright/.cache/
+
+# Browser evidence. A screenshot of the synthetic fixture that is worth keeping has
+# to be added deliberately with `git add -f`; the artwork the interface ships is
+# re-included below.
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+!public/**
+!src/assets/**
+
+# A real document and anything rendered from one never belongs here.
+*.docx
+*.pdf
+
+# ---------------------------------------------------------------------------
+# Logs, editors and operating systems
+# ---------------------------------------------------------------------------
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+*.log
+.vscode/
+.idea/
+*.swp
+.DS_Store
+Thumbs.db

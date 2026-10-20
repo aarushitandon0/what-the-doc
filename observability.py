@@ -1,0 +1,343 @@
+"""Optional, content-free Sentry transactions for the custom local repair pipeline.
+
+Only this module talks to the SDK. There are no automatic integrations, error events,
+request capture, logs, breadcrumbs, profiles or attachments. The final transaction
+hook rebuilds the payload from a small schema instead of trying to redact prose.
+All SDK failures are isolated from the operation being observed.
+"""
+from contextlib import contextmanager
+from contextvars import ContextVar
+import hashlib
+import os
+from pathlib import Path
+import re
+import threading
+
+TRANSACTIONS = frozenset(('repair.execute', 'review.accept', 'review.reject',
+                          'download.execute'))
+STAGES = frozenset(('diagnosis.execute', 'model.inference', 'diagnosis.validate',
+                    'proposal.validate', 'proposal.prepare', 'candidate.create',
+                    'render.original', 'render.candidate', 'preservation.check',
+                    'review.integrity', 'download.integrity'))
+ERRORS = frozenset(('model_unavailable', 'model_timeout', 'invalid_response',
+                    'invalid_selection', 'unsupported_formatting', 'invalid_operation',
+                    'render_failure', 'candidate_integrity_failed', 'invalid_state',
+                    'internal_error'))
+OUTCOMES = frozenset(('queued', 'running', 'failed', 'awaiting_review', 'accepted',
+                     'rejected', 'no_change', 'unsupported', 'needs_clarification',
+                     'passed', 'skipped', 'completed'))
+_HEX = re.compile(r'^[a-f0-9]{32}$')
+_HASH = re.compile(r'^[a-f0-9]{64}$')
+_MODEL = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$')
+_current = ContextVar('wtd_telemetry_transaction', default=None)
+_client = None
+_attempted = False
+_lock = threading.Lock()
+
+
+def _safe_data(data):
+    """Allow only typed application metadata, never model/user prose."""
+    clean = {}
+    for key, value in (data or {}).items():
+        if key == 'wtd.job_id':
+            valid = isinstance(value, str) and _HEX.fullmatch(value)
+        elif key in ('wtd.prompt_sha256', 'wtd.source_revision'):
+            valid = isinstance(value, str) and _HASH.fullmatch(value)
+        elif key == 'wtd.mode':
+            valid = isinstance(value, str) and value in ('live', 'fixture')
+        elif key == 'wtd.outcome':
+            valid = isinstance(value, str) and value in OUTCOMES
+        elif key == 'wtd.error_code':
+            valid = isinstance(value, str) and value in ERRORS
+        elif key in ('gen_ai.request.model', 'gen_ai.response.model'):
+            valid = isinstance(value, str) and _MODEL.fullmatch(value)
+        elif key == 'gen_ai.operation.name':
+            valid = value == 'chat'
+        elif key == 'gen_ai.operation.type':
+            valid = value == 'ai_client'
+        elif key == 'gen_ai.provider.name':
+            valid = value == 'ollama'
+        elif key in ('gen_ai.usage.input_tokens', 'gen_ai.usage.output_tokens',
+                     'gen_ai.usage.total_tokens'):
+            valid = type(value) is int and value >= 0
+        else:
+            valid = False
+        if valid:
+            clean[key] = value
+    return clean
+
+
+def _clean_trace(trace):
+    clean = {k: trace[k] for k in ('trace_id', 'span_id', 'parent_span_id')
+             if k in trace and isinstance(trace[k], str)
+             and re.fullmatch(r'[a-f0-9]{16}|[a-f0-9]{32}', trace[k])}
+    if trace.get('op') in ('task', 'wtd.stage', 'gen_ai.chat'):
+        clean['op'] = trace['op']
+    if trace.get('status') in ('ok', 'internal_error', 'unknown_error'):
+        clean['status'] = trace['status']
+    clean['data'] = _safe_data(trace.get('data'))
+    return clean
+
+
+def _sanitize_transaction(event, hint):
+    """Final export boundary: discard every field that isn't explicitly needed."""
+    try:
+        # Attachments are separate envelope items and do not live in event JSON.
+        hint.pop('attachments', None)
+        if event.get('type') != 'transaction' or event.get('transaction') not in TRANSACTIONS:
+            return None
+        result = {k: event[k] for k in ('event_id', 'start_timestamp', 'timestamp')
+                  if k in event}
+        result.update(type='transaction', platform='python',
+                      transaction=event['transaction'],
+                      contexts={'trace': _clean_trace(event.get('contexts', {}).get('trace', {}))})
+        result['spans'] = []
+        for span_event in event.get('spans', []):
+            if span_event.get('description') not in STAGES:
+                continue
+            clean = _clean_trace(span_event)
+            clean.update({k: span_event[k] for k in ('start_timestamp', 'timestamp')
+                          if k in span_event})
+            clean['description'] = span_event['description']
+            result['spans'].append(clean)
+        return result
+    except Exception:
+        return None
+
+
+def initialize(*, transport=None):
+    """Read SENTRY_DSN and WTD_SENTRY_TRACES_SAMPLE_RATE once; absent DSN is offline.
+
+    ``transport`` is an explicit test seam. It is never selected from a request.
+    The client is bound only inside our isolation scopes, not the global SDK scope.
+    """
+    global _client, _attempted
+    with _lock:
+        if _attempted:
+            return _client is not None
+        _attempted = True
+        dsn = os.environ.get('SENTRY_DSN', '').strip()
+        if not dsn:
+            return False
+        try:
+            import sentry_sdk
+            from sentry_sdk.envelope import Envelope
+            from sentry_sdk.transport import Transport, make_transport
+
+            class SafeTransport(Transport):
+                """The final envelope boundary also refuses separate attachments."""
+                def __init__(self, options):
+                    super().__init__(options)
+                    self.delegate = make_transport(dict(options, transport=transport))
+
+                def capture_envelope(self, envelope):
+                    try:
+                        clean = Envelope(headers={k: envelope.headers[k]
+                                         for k in ('event_id', 'sent_at') if k in envelope.headers})
+                        for item in envelope.items:
+                            if item.type == 'transaction':
+                                event = _sanitize_transaction(item.get_transaction_event(), {})
+                                if event is not None:
+                                    clean.add_transaction(event)
+                        if clean.items and self.delegate is not None:
+                            self.delegate.capture_envelope(clean)
+                    except Exception:
+                        pass
+
+                def flush(self, timeout, callback=None):
+                    try:
+                        if self.delegate is not None:
+                            self.delegate.flush(timeout, callback)
+                    except Exception:
+                        pass
+
+                def kill(self):
+                    try:
+                        if self.delegate is not None:
+                            self.delegate.kill()
+                    except Exception:
+                        pass
+
+            rate = float(os.environ.get('WTD_SENTRY_TRACES_SAMPLE_RATE', '1.0'))
+            if not 0 <= rate <= 1:
+                return False
+            _client = sentry_sdk.Client(
+                dsn=dsn, transport=SafeTransport, traces_sample_rate=rate,
+                default_integrations=False, auto_enabling_integrations=False,
+                integrations=[], max_request_body_size='never',
+                # Every SDK 2.72 category is explicit: partial dictionaries opt in
+                # to more permissive defaults. Keep this paired with the SDK pin.
+                data_collection={
+                    'user_info': False, 'cookies': {'mode': 'off'},
+                    'http_headers': {'request': {'mode': 'off'}}, 'http_bodies': [],
+                    'url_query_params': {'mode': 'off'},
+                    'graphql': {'document': False, 'variables': False},
+                    'gen_ai': {'inputs': False, 'outputs': False},
+                    'database_query_data': False, 'queues': False,
+                    'stack_frame_variables': False, 'frame_context_lines': 0,
+                },
+                include_local_variables=False, include_source_context=False,
+                attach_stacktrace=False, max_breadcrumbs=0,
+                before_breadcrumb=lambda *_: None, before_send=lambda *_: None,
+                before_send_transaction=_sanitize_transaction,
+                enable_logs=False, auto_session_tracking=False,
+                profiles_sample_rate=0, send_client_reports=False,
+                trace_propagation_targets=[], server_name='', debug=False,
+                stream_gen_ai_spans=False,
+                release='what-the-doc', environment='local',
+            )
+            return True
+        except Exception:
+            _client = None
+            return False
+
+
+def source_revision():
+    """Hash the actual implementation sources; never invent a schema version."""
+    try:
+        digest = hashlib.sha256()
+        for name in ('observability.py', 'api.py', 'pipeline.py', 'gemma_adapter.py',
+                     'diagnosis.py', 'workflow.py', 'engine.py', 'render.py'):
+            digest.update(name.encode('ascii'))
+            digest.update((Path(__file__).parent / name).read_bytes())
+        return digest.hexdigest()
+    except Exception:
+        return None
+
+
+class Trace:
+    """Safe facade; callers cannot add arbitrary span attributes."""
+    def __init__(self, raw=None, name=None, inherited=None):
+        self.raw, self.name = raw, name
+        self.data = dict(inherited or {})
+
+    def set(self, *, outcome=None, error_code=None, model=None, mode=None,
+            job_id=None, prompt_sha256=None, source_revision=None,
+            input_tokens=None, output_tokens=None, response_model=None):
+        proposed = {'wtd.outcome': outcome, 'wtd.error_code': error_code,
+                    'gen_ai.request.model': model, 'wtd.mode': mode,
+                    'gen_ai.response.model': response_model,
+                    'wtd.job_id': job_id,
+                    'wtd.prompt_sha256': prompt_sha256,
+                    'wtd.source_revision': source_revision,
+                    'gen_ai.usage.input_tokens': input_tokens,
+                    'gen_ai.usage.output_tokens': output_tokens}
+        if (type(input_tokens) is int and input_tokens >= 0
+                and type(output_tokens) is int and output_tokens >= 0):
+            proposed['gen_ai.usage.total_tokens'] = input_tokens + output_tokens
+        self.data.update(_safe_data(proposed))
+        try:
+            if self.raw is not None:
+                for key, value in self.data.items():
+                    self.raw.set_data(key, value)
+                self.raw.set_status('internal_error' if self.data.get('wtd.error_code') else 'ok')
+        except Exception:
+            pass
+
+
+def _error_code(error):
+    code = getattr(error, 'code', None)
+    if code in ERRORS:
+        return code
+    if type(error).__name__ in ('RenderFailed', 'RendererUnavailable'):
+        return 'render_failure'
+    if isinstance(error, ValueError):
+        return 'invalid_operation'
+    return 'internal_error'
+
+
+@contextmanager
+def transaction(name, *, job_id=None, mode=None, model=None):
+    """A finite transaction inside the actual worker or review/download request.
+
+    Pipeline calls reuse the worker's repair transaction. Later human requests open
+    separate transactions with the same opaque job ID, with no open human wait span.
+    """
+    existing = _current.get()
+    if name == 'repair.execute' and existing is not None and existing.name == name:
+        existing.set(job_id=job_id, mode=mode, model=model)
+        yield existing
+        return
+    trace, isolation, current_scope_cm, raw_cm = Trace(name=name), None, None, None
+    try:
+        if name in TRANSACTIONS and initialize():
+            import sentry_sdk
+            isolation = sentry_sdk.isolation_scope()
+            scope = isolation.__enter__()
+            scope.set_client(_client)
+            # Current scope clients take precedence over the isolation client.
+            # Bind both so an unrelated ambient SDK cannot receive our spans.
+            current_scope_cm = sentry_sdk.new_scope()
+            current_scope = current_scope_cm.__enter__()
+            current_scope.set_client(_client)
+            raw_cm = sentry_sdk.start_transaction(name=name, op='task')
+            trace.raw = raw_cm.__enter__()
+        trace.set(job_id=job_id, mode=mode, model=model, source_revision=source_revision())
+    except Exception:
+        trace.raw = None
+    token = _current.set(trace)
+    try:
+        yield trace
+    except BaseException as error:
+        trace.set(outcome='failed', error_code=_error_code(error))
+        raise
+    finally:
+        _current.reset(token)
+        if raw_cm is not None:
+            try:
+                # Never pass the application exception/traceback to the SDK.
+                raw_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+        if isolation is not None:
+            if current_scope_cm is not None:
+                try:
+                    current_scope_cm.__exit__(None, None, None)
+                except Exception:
+                    pass
+            try:
+                isolation.__exit__(None, None, None)
+            except Exception:
+                pass
+
+
+@contextmanager
+def span(name, **metadata):
+    parent = _current.get()
+    trace = Trace(name=name, inherited=parent.data if parent else None)
+    raw_cm = None
+    try:
+        if name in STAGES and parent is not None and parent.raw is not None:
+            import sentry_sdk
+            raw_cm = sentry_sdk.start_span(name=name,
+                                           op='gen_ai.chat' if name == 'model.inference' else 'wtd.stage')
+            trace.raw = raw_cm.__enter__()
+            if name == 'model.inference':
+                trace.data.update({'gen_ai.operation.name': 'chat',
+                                   'gen_ai.operation.type': 'ai_client', 'gen_ai.provider.name': 'ollama'})
+        trace.set(**metadata)
+    except Exception:
+        trace.raw = None
+    try:
+        yield trace
+    except BaseException as error:
+        trace.set(outcome='failed', error_code=_error_code(error))
+        raise
+    else:
+        if 'wtd.outcome' not in trace.data or trace.data['wtd.outcome'] in ('running', 'queued'):
+            trace.set(outcome='completed')
+    finally:
+        if raw_cm is not None:
+            try:
+                raw_cm.__exit__(None, None, None)
+            except Exception:
+                pass
+
+
+def flush(timeout=2):
+    """Best-effort shutdown helper; it proves no hosted delivery or visibility."""
+    try:
+        if _client is not None:
+            _client.flush(timeout=timeout)
+    except Exception:
+        pass

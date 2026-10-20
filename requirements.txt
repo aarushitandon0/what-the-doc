@@ -1,0 +1,12 @@
+# Core: inspection, patching and page rasterisation.
+lxml>=5,<7
+pypdfium2>=4,<6
+
+# Local HTTP adapter and its tests. Install the full manifest for full discovery.
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+python-multipart>=0.0.9,<1
+httpx>=0.27,<1          # test_api.py only, for fastapi.testclient
+
+# Optional telemetry remains a no-op without SENTRY_DSN. Tested with this SDK API.
+sentry-sdk==2.72.0

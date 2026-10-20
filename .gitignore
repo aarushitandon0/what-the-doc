@@ -1,0 +1,153 @@
+# .gitignore — what never belongs in this repository, and why.
+#
+# Three rules shape this file:
+#   1. A secret is never committed, not even an example with a real value in it.
+#   2. Anything derived from a document is treated as private. Candidates, rendered
+#      pages, reports and logs can all reveal the contents of someone's file, so the
+#      run directory is ignored as a whole rather than file by file.
+#   3. Anything large and not ours stays out: the unpacked LibreOffice payload, model
+#      weights, virtual environments and installed packages are reproducible from
+#      `requirements.txt`, `package.json` and the documented setup commands.
+#
+# Patterns here are deliberately broad. Where a broad pattern would swallow a file
+# the project genuinely needs, the exception is written out immediately below it so
+# the reason stays visible.
+
+# ---------------------------------------------------------------------------
+# Credentials and local configuration
+# ---------------------------------------------------------------------------
+# SENTRY_DSN, GEMMA_MODEL, SOFFICE_PATH and friends are read from the environment at
+# runtime (see OBSERVABILITY.md). They are never read from a committed file.
+.env
+.env.*
+!.env.example
+*.key
+*.pem
+*.pfx
+*.p12
+*.crt
+secrets.json
+.sentryclirc
+
+# ---------------------------------------------------------------------------
+# Python environments, caches and tooling output
+# ---------------------------------------------------------------------------
+.venv/
+venv/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.eggs/
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# ---------------------------------------------------------------------------
+# Node and the Vite frontend
+# ---------------------------------------------------------------------------
+# frontend/.gitignore carries the detail; these repeat the essentials so a clone from
+# the project root is clean even if that file is missing.
+node_modules/
+.npm/
+.vite/
+*.tsbuildinfo
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# Playwright's downloaded browser binaries and run output. The browsers live in the
+# user's own cache directory; these cover the case where a run writes beside the repo.
+test-results/
+playwright-report/
+blob-report/
+.playwright/
+playwright/.cache/
+
+# ---------------------------------------------------------------------------
+# Local tool payloads
+# ---------------------------------------------------------------------------
+# The unpacked LibreOffice is hundreds of megabytes and is not ours. It is installed
+# per-machine, found on PATH, or unpacked here with the msiexec command in README.md.
+.tools/
+
+# ---------------------------------------------------------------------------
+# Model weights
+# ---------------------------------------------------------------------------
+# Should any ever be placed in the tree. Models live in the runtime's own store
+# (Ollama's models directory), never in this repository.
+*.gguf
+*.safetensors
+*.bin
+*.pt
+*.onnx
+models/
+
+# ---------------------------------------------------------------------------
+# Run artefacts: anything derived from a document
+# ---------------------------------------------------------------------------
+# `work/` is where every CLI run, evaluation and API server writes: uploaded copies,
+# patched candidates, rendered page images, pipeline.json reports and logs. Ignoring
+# the directory is the same privacy rule that applies to the document itself.
+work/
+*.docx
+*.pdf
+*.log
+
+# Rendered pages and screenshots. Browser evidence is written under work/ or a
+# scratch directory by default; a synthetic-fixture screenshot that is genuinely worth
+# keeping has to be added deliberately with `git add -f`, so a real document's page
+# can never be committed by an untracked-file sweep.
+*.png
+*.jpg
+*.jpeg
+*.webp
+*.gif
+*.bmp
+*.tif
+*.tiff
+
+# The exception: the interface's own artwork and anything else shipped as a static
+# asset of the app. These are drawn for this project and contain no document content.
+!frontend/public/**
+!frontend/src/assets/**
+
+# ---------------------------------------------------------------------------
+# Editors and operating systems
+# ---------------------------------------------------------------------------
+.vscode/
+!.vscode/extensions.json
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# ---------------------------------------------------------------------------
+# Scratch space
+# ---------------------------------------------------------------------------
+# Somewhere to put a throwaway file without it showing up as untracked.
+scratch/
+tmp/
+*.tmp
+*.bak
+*.orig
+*.rej
