@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 470" width="1000" height="470" role="img" aria-label="How an effective paragraph property is resolved through direct formatting, the style chain and document defaults.">
+  <style>
+    .bg   { fill: #FFF7E9; stroke: #E8DCC6; }
+    .box  { fill: #FFFFFF; stroke: #143B2F; stroke-width: 1.4; }
+    .lay  { fill: #FFFFFF; stroke: #143B2F; stroke-width: 1.4; }
+    .lay4 { fill: #FAF2E2; stroke: #143B2F; stroke-width: 1.4; stroke-dasharray: 5 3; }
+    .t    { font-family: Rubik, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #13221D; }
+    .title{ font-size: 21px; font-weight: 600; }
+    .sub  { font-size: 13px; fill: #4F5F57; }
+    .d    { font-size: 12px; fill: #5A6A62; }
+    .cap  { font-size: 11px; fill: #4F5F57; letter-spacing: .4px; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 13px; font-weight: 600; fill: #13221D; }
+    .m    { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 11.5px; fill: #30423A; }
+    .arr  { stroke: #FF8739; stroke-width: 2; fill: none; }
+    .rule { stroke: #E0D5BE; stroke-width: 1; }
+  </style>
+  <defs>
+    <marker id="o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#FF8739"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0.5" y="0.5" width="999" height="469" rx="14"/>
+
+  <text class="t title" x="40" y="46">How a property gets its effective value</text>
+  <text class="t sub" x="40" y="70">Four layers, highest first. The resolver reports the value and the layer that supplied it, so a diagnosis can tell inherited from deliberate.</text>
+
+  <rect class="lay" x="44" y="106" width="420" height="60" rx="9"/>
+  <text class="mono" x="62" y="133">direct</text>
+  <text class="t d" x="62" y="152">set on this paragraph, wins over everything below</text>
+
+  <rect class="lay" x="44" y="178" width="420" height="60" rx="9"/>
+  <text class="mono" x="62" y="205">style:&lt;id&gt;</text>
+  <text class="t d" x="62" y="224">the first style in the w:basedOn chain that sets it</text>
+
+  <rect class="lay" x="44" y="250" width="420" height="60" rx="9"/>
+  <text class="mono" x="62" y="277">doc_defaults</text>
+  <text class="t d" x="62" y="296">w:docDefaults / w:pPrDefault</text>
+
+  <rect class="lay4" x="44" y="322" width="420" height="60" rx="9"/>
+  <text class="mono" x="62" y="349">application_default</text>
+  <text class="t d" x="62" y="368">nothing set it, so the value is reported as null</text>
+
+  <path class="arr" d="M486 376 V116" marker-end="url(#o)"/>
+  <text class="t cap" x="498" y="246" transform="rotate(-90 498 246)" text-anchor="middle">PRECEDENCE</text>
+
+  <rect class="box" x="556" y="106" width="404" height="276" rx="9"/>
+  <text class="t" x="576" y="134" font-size="14" font-weight="600">One heading paragraph, as inspected</text>
+  <line class="rule" x1="556" y1="148" x2="960" y2="148"/>
+  <text class="t cap" x="576" y="170">PROPERTY</text>
+  <text class="t cap" x="742" y="170">EFFECTIVE</text>
+  <text class="t cap" x="830" y="170">SUPPLIED BY</text>
+  <line class="rule" x1="556" y1="180" x2="960" y2="180"/>
+
+  <text class="m" x="576" y="202">space_before_pt</text><text class="m" x="742" y="202">48.0</text><text class="m" x="830" y="202">direct</text>
+  <text class="m" x="576" y="228">space_after_pt</text><text class="m" x="742" y="228">12.0</text><text class="m" x="830" y="228">style:Heading2</text>
+  <text class="m" x="576" y="254">alignment</text><text class="m" x="742" y="254">left</text><text class="m" x="830" y="254">doc_defaults</text>
+  <text class="m" x="576" y="280">left_indent_pt</text><text class="m" x="742" y="280">null</text><text class="m" x="830" y="280">application_default</text>
+
+  <line class="rule" x1="556" y1="300" x2="960" y2="300"/>
+  <text class="t d" x="576" y="324">Its same-style peers resolve to 12.0pt above. That is</text>
+  <text class="t d" x="576" y="342">evidence of a fault, never proof: a deliberate chapter</text>
+  <text class="t d" x="576" y="360">break is allowed to differ from its peers.</text>
+
+  <text class="t d" x="44" y="414">application_default means unset. It is not zero, and Word's own built-in fallback is deliberately not restated here as a number.</text>
+  <text class="t d" x="44" y="436">Numbering indentation, table-style conditional formatting and theme effects are not resolved. A paragraph touched by them carries a caveat</text>
+  <text class="t d" x="44" y="454">instead of a confident number, and an unparsable styles.xml is a hard error rather than being treated as absent.</text>
+</svg>

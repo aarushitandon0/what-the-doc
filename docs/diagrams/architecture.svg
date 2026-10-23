@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 706" width="1000" height="706" role="img" aria-label="Layered architecture: interface, HTTP adapter, orchestration, diagnosis and repair, core, tracing.">
+  <style>
+    .bg    { fill: #FFF7E9; stroke: #E8DCC6; }
+    .row   { fill: #FFFFFF; stroke: #143B2F; stroke-width: 1.4; }
+    .t     { font-family: Rubik, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #13221D; }
+    .title { font-size: 21px; font-weight: 600; }
+    .sub   { font-size: 13px; fill: #4F5F57; }
+    .layer { font-size: 15px; font-weight: 600; fill: #143B2F; }
+    .note  { font-size: 12px; fill: #5A6A62; }
+    .foot  { font-size: 12.5px; fill: #4F5F57; }
+    .chip  { fill: #DDE9CF; stroke: #143B2F; stroke-width: 1.1; }
+    .ext   { fill: #FFF7E9; stroke: #143B2F; stroke-width: 1.1; stroke-dasharray: 4 3; opacity: .85; }
+    .mono  { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 12.5px; fill: #13221D; }
+    .extt  { font-family: Rubik, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; font-size: 12.5px; fill: #30423A; }
+    .chev  { stroke: #143B2F; stroke-width: 2; fill: none; stroke-linecap: round; stroke-linejoin: round; }
+  </style>
+  <rect class="bg" x="0.5" y="0.5" width="999" height="705" rx="14"/>
+
+  <text class="t title" x="40" y="46">System architecture</text>
+  <text class="t sub" x="40" y="70">Every layer calls only the layer beneath it. Nothing lower ever reaches back up, which is why the CLI still works with no model, no renderer and no server.</text>
+
+  <rect class="ext" x="762" y="22" width="22" height="13" rx="3"/>
+  <text class="t note" x="792" y="33">outside this repository</text>
+
+  <!-- Row 1 -->
+  <rect class="row" x="40" y="100" width="920" height="76" rx="10"/>
+  <text class="t layer" x="62" y="130">Interface</text>
+  <text class="t note" x="62" y="151">React app, drives the API only</text>
+  <rect class="chip" x="330" y="123" width="114" height="30" rx="7"/><text class="mono" x="343" y="143">frontend/src</text>
+
+  <path class="chev" d="M184 182 l6 7 l6 -7"/>
+
+  <!-- Row 2 -->
+  <rect class="row" x="40" y="194" width="920" height="76" rx="10"/>
+  <text class="t layer" x="62" y="224">HTTP adapter</text>
+  <text class="t note" x="62" y="245">15 routes, 8 job states, no new powers</text>
+  <rect class="chip" x="330" y="217" width="69" height="30" rx="7"/><text class="mono" x="343" y="237">api.py</text>
+  <text class="t note" x="420" y="237">binds to 127.0.0.1, no authentication, no database</text>
+
+  <path class="chev" d="M184 276 l6 7 l6 -7"/>
+
+  <!-- Row 3 -->
+  <rect class="row" x="40" y="288" width="920" height="76" rx="10"/>
+  <text class="t layer" x="62" y="318">Orchestration</text>
+  <text class="t note" x="62" y="339">One complaint to one reviewable candidate</text>
+  <rect class="chip" x="330" y="311" width="107" height="30" rx="7"/><text class="mono" x="343" y="331">pipeline.py</text>
+  <text class="t note" x="458" y="331">stops at awaiting_review, never accepts</text>
+
+  <path class="chev" d="M184 370 l6 7 l6 -7"/>
+
+  <!-- Row 4 -->
+  <rect class="row" x="40" y="382" width="920" height="76" rx="10"/>
+  <text class="t layer" x="62" y="412">Diagnosis and repair</text>
+  <text class="t note" x="62" y="433">What to change, then changing it safely</text>
+  <rect class="chip" x="330" y="405" width="114" height="30" rx="7"/><text class="mono" x="343" y="425">diagnosis.py</text>
+  <rect class="chip" x="456" y="405" width="144" height="30" rx="7"/><text class="mono" x="469" y="425">gemma_adapter.py</text>
+  <rect class="chip" x="612" y="405" width="107" height="30" rx="7"/><text class="mono" x="625" y="425">workflow.py</text>
+  <rect class="ext" x="743" y="405" width="162" height="30" rx="7"/><text class="extt" x="757" y="425">Ollama, local Gemma</text>
+
+  <path class="chev" d="M184 464 l6 7 l6 -7"/>
+
+  <!-- Row 5 -->
+  <rect class="row" x="40" y="476" width="920" height="76" rx="10"/>
+  <text class="t layer" x="62" y="506">Core</text>
+  <text class="t note" x="62" y="527">Reads bytes, resolves styles, writes one part</text>
+  <rect class="chip" x="330" y="499" width="92" height="30" rx="7"/><text class="mono" x="343" y="519">engine.py</text>
+  <rect class="chip" x="434" y="499" width="114" height="30" rx="7"/><text class="mono" x="447" y="519">structure.py</text>
+  <rect class="chip" x="560" y="499" width="92" height="30" rx="7"/><text class="mono" x="573" y="519">styles.py</text>
+  <rect class="chip" x="664" y="499" width="92" height="30" rx="7"/><text class="mono" x="677" y="519">render.py</text>
+  <rect class="ext" x="780" y="499" width="100" height="30" rx="7"/><text class="extt" x="794" y="519">LibreOffice</text>
+
+  <path class="chev" d="M184 558 l6 7 l6 -7"/>
+
+  <!-- Row 6 -->
+  <rect class="row" x="40" y="570" width="920" height="76" rx="10"/>
+  <text class="t layer" x="62" y="600">Tracing</text>
+  <text class="t note" x="62" y="621">Optional, content-free, off by default</text>
+  <rect class="chip" x="330" y="593" width="144" height="30" rx="7"/><text class="mono" x="343" y="613">observability.py</text>
+  <rect class="ext" x="486" y="593" width="136" height="30" rx="7"/><text class="extt" x="500" y="613">Sentry, optional</text>
+  <text class="t note" x="642" y="613">hard no-op without SENTRY_DSN</text>
+
+  <text class="t foot" x="40" y="676">styles.py, structure.py, render.py and observability.py import nothing else from the project. Tracing is a leaf that several layers call and none depend on.</text>
+</svg>

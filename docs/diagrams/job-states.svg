@@ -1,0 +1,74 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1000 512" width="1000" height="512" role="img" aria-label="The eight job states and the transitions between them.">
+  <style>
+    .bg   { fill: #FFF7E9; stroke: #E8DCC6; }
+    .box  { fill: #FFFFFF; stroke: #143B2F; stroke-width: 1.4; }
+    .hi   { fill: #DDE9CF; stroke: #143B2F; stroke-width: 1.8; }
+    .go   { fill: #143B2F; stroke: #143B2F; stroke-width: 1.4; }
+    .t    { font-family: Rubik, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; fill: #13221D; }
+    .title{ font-size: 21px; font-weight: 600; }
+    .sub  { font-size: 13px; fill: #4F5F57; }
+    .d    { font-size: 11.5px; fill: #5A6A62; }
+    .dl   { font-size: 11.5px; fill: #E3EEDA; }
+    .mono { font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 13px; font-weight: 600; fill: #13221D; }
+    .monol{ font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace; font-size: 13px; font-weight: 600; fill: #FFF7E9; }
+    .arr  { stroke: #143B2F; stroke-width: 1.5; fill: none; }
+    .tag  { font-size: 11px; fill: #B8422D; font-weight: 600; }
+  </style>
+  <defs>
+    <marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0 0 L10 5 L0 10 z" fill="#143B2F"/>
+    </marker>
+  </defs>
+  <rect class="bg" x="0.5" y="0.5" width="999" height="511" rx="14"/>
+
+  <text class="t title" x="40" y="46">The eight job states</text>
+  <text class="t sub" x="40" y="70">Each state maps onto something the pipeline really produces, and none of them was invented for the interface.</text>
+
+  <rect class="box" x="44" y="216" width="140" height="60" rx="9"/>
+  <text class="mono" x="60" y="243">queued</text>
+  <text class="t d" x="60" y="261">accepted, not started</text>
+
+  <path class="arr" d="M184 246 H224" marker-end="url(#a)"/>
+
+  <rect class="box" x="226" y="216" width="150" height="60" rx="9"/>
+  <text class="mono" x="242" y="243">running</text>
+  <text class="t d" x="242" y="261">the pipeline executes</text>
+
+  <path class="arr" d="M376 246 H398 V126 H418" marker-end="url(#a)"/>
+  <path class="arr" d="M376 246 H398 V206 H418" marker-end="url(#a)"/>
+  <path class="arr" d="M376 246 H398 V286 H418" marker-end="url(#a)"/>
+  <path class="arr" d="M376 246 H398 V366 H418" marker-end="url(#a)"/>
+
+  <rect class="box" x="420" y="96" width="300" height="60" rx="9"/>
+  <text class="mono" x="436" y="123">needs_clarification</text>
+  <text class="t d" x="436" y="141">the model asked one question</text>
+  <text class="tag" x="730" y="131">terminal</text>
+
+  <rect class="box" x="420" y="176" width="300" height="60" rx="9"/>
+  <text class="mono" x="436" y="203">no_supported_repair</text>
+  <text class="t d" x="436" y="221">no_change or unsupported, reported as given</text>
+  <text class="tag" x="730" y="211">terminal</text>
+
+  <rect class="box" x="420" y="256" width="300" height="60" rx="9"/>
+  <text class="mono" x="436" y="283">failed</text>
+  <text class="t d" x="436" y="301">always carries one named code</text>
+  <text class="tag" x="730" y="291">terminal</text>
+
+  <rect class="hi" x="420" y="336" width="300" height="60" rx="9"/>
+  <text class="mono" x="436" y="363">awaiting_review</text>
+  <text class="t d" x="436" y="381">a candidate exists, nothing is accepted</text>
+
+  <path class="arr" d="M720 366 H738 V336 H758" marker-end="url(#a)"/>
+  <path class="arr" d="M720 366 H738 V416 H758" marker-end="url(#a)"/>
+
+  <rect class="go" x="760" y="306" width="200" height="60" rx="9"/>
+  <text class="monol" style="fill:#FFF7E9" x="776" y="333">accepted</text>
+  <text class="t dl" style="fill:#DCE9D2" x="776" y="351">a person, with the hash</text>
+
+  <rect class="box" x="760" y="386" width="200" height="60" rx="9"/>
+  <text class="mono" x="776" y="413">rejected</text>
+  <text class="t d" x="776" y="431">a person, original kept</text>
+
+  <text class="t d" x="44" y="482">Reaching awaiting_review is not acceptance. accepted is reachable only through POST /api/jobs/{id}/accept carrying the candidate hash the reviewer saw,</text>
+  <text class="t d" x="44" y="498">and a download is refused in every other state.</text>
+</svg>
