@@ -23,6 +23,9 @@ class EffectiveNoOpApiTests(ApiBase):
         redundant = {'paragraph_id': self.spacing_id,
                      'field': 'space_after_pt', 'value': 6.0}
         found['operations'].append(redundant)
+        # Every changed property is cited, as diagnosis.check requires.
+        found['evidence'].append({'paragraph_id': self.spacing_id,
+                                  'field': 'space_after_pt'})
         started = self.start(document_id, self.spacing_id,
                              'Too much space above this heading.', found)
         self.assertEqual(started.status_code, 202, started.text)

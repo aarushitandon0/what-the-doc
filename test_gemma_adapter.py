@@ -209,6 +209,10 @@ class PromptRevisionTests(unittest.TestCase):
     def test_the_prompt_still_forbids_inventing_a_confidence_score(self):
         self.assertIn('do not include a confidence score', self.collapsed)
 
+    def test_the_prompt_is_the_one_measured_with_the_v3_baseline(self):
+        # Rewordings are measured before they ship; this pins the measured text.
+        self.assertEqual(gemma_adapter.prompt_sha256(), gemma_adapter.PROMPT_SHA256_V3)
+
     def test_the_worked_example_cannot_be_copied_as_a_real_hash(self):
         # The example must not carry a hash-shaped literal a model could echo back.
         self.assertIn('"<copy the value from the input>"', self.prompt)
@@ -666,7 +670,126 @@ class ResponseSchemaTests(unittest.TestCase):
         operation_ids = [shape['properties']['target_id']['enum']
                          for shape in proposal['operations']['items']['anyOf']
                          if 'target_id' in shape['properties']]
-        self.assertEqual(operation_ids, [sorted(self.break_ids)])
+        # This paragraph holds two removable breaks and none was selected, so no
+        # removal shape is offered at all; both ids remain citable as evidence.
+        self.assertEqual(operation_ids, [])
+        cited = [shape['properties']['target_id']['enum']
+                 for shape in proposal['evidence']['items']['anyOf']
+                 if 'target_id' in shape['properties']]
+        self.assertEqual(cited, [sorted(self.break_ids)])
+
+    def test_a_selected_break_is_the_only_removal_the_request_offers(self):
+        sent = {}
+
+        def fake_urlopen(request, timeout=None):
+            sent.update(json.loads(request.data))
+            reply = {'model': 'gemma4:e2b', 'message': {'content': json.dumps(
+                self.answer(status='no_change', operations=[], evidence=[]))}}
+            return io.BytesIO(json.dumps(reply).encode())
+
+        os.environ['GEMMA_MODEL'] = 'gemma4:e2b'
+        self.addCleanup(os.environ.pop, 'GEMMA_MODEL', None)
+        chosen = self.break_ids[0]
+        with patch.object(gemma_adapter.urllib.request, 'urlopen', fake_urlopen):
+            _, metadata = gemma_adapter.diagnose(self.source, 'This break is unwanted.',
+                                                 self.selected, break_target_id=chosen)
+        proposal = sent['format']['anyOf'][0]['properties']
+        operation_ids = [shape['properties']['target_id']['enum']
+                         for shape in proposal['operations']['items']['anyOf']
+                         if 'target_id' in shape['properties']]
+        self.assertEqual(operation_ids, [[chosen]])
+        self.assertEqual(metadata['actionable_target_ids'], [chosen])
+
+
+class AmbiguousBreakTests(unittest.TestCase):
+    """Two removable breaks, none selected: the model may ask, never pick."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.source = Path(self.tmp.name) / 'breaks.docx'
+        break_fixtures.build_manual_page_break(self.source)
+        self.hash = engine.signature(self.source)
+        self.two = break_fixtures.MANUAL_PAGE_BREAK_IDS['two_breaks_paragraph']
+        self.one = break_fixtures.MANUAL_PAGE_BREAK_IDS['deliberate_break_paragraph']
+
+    def breaks(self, paragraph_id, selected=None):
+        return gemma_adapter.evidence(self.source, paragraph_id,
+                                      break_target_id=selected)['explicit_breaks']
+
+    def guess(self, ids):
+        return {'status': 'proposed', 'explanation': 'Remove the first.',
+                'evidence': [{'paragraph_id': self.two, 'target_id': ids[0]}],
+                'source_sha256': self.hash,
+                'operations': [{'operation': engine.REMOVE_BREAK, 'target_id': ids[0],
+                                'expected_break_type': 'page'}],
+                'question': None}
+
+    def test_no_selection_is_reported_when_nothing_was_selected(self):
+        # Regression: None matched the id-less lastRenderedPageBreak in paragraph 4,
+        # which the model was then told was "the break the person pointed at".
+        for paragraph_id in (self.two, self.one, 0):
+            found = self.breaks(paragraph_id)
+            self.assertIsNone(found['user_selected_break'], paragraph_id)
+            self.assertTrue(all(r['paragraph_id'] == paragraph_id
+                                for r in found['breaks_in_selected_paragraph']))
+
+    def test_the_ambiguity_is_stated_and_nothing_is_removable(self):
+        found = self.breaks(self.two)
+        self.assertTrue(found['break_selection_required'])
+        self.assertEqual(found['removal_target_ids'], [])
+        self.assertEqual(len(found['supplied_target_ids']), 2)
+        self.assertIn('has not selected', found['selection_note'])
+
+    def test_the_suggested_question_names_each_break_and_fits_the_limit(self):
+        found = self.breaks(self.two)
+        question = found['suggested_question']
+        self.assertLessEqual(len(question), diagnosis.MAX_QUESTION)
+        self.assertTrue(question.startswith('Which page break'))
+        for record in found['breaks_in_selected_paragraph']:
+            if record['edit_eligible']:
+                tail = ' '.join(record['text_before'].split())[-10:]
+                self.assertIn(tail, question)
+
+    def test_a_long_context_still_yields_a_bounded_question(self):
+        long = [{'break_type': 'page', 'text_before': 'word ' * 200}] * 5
+        self.assertLessEqual(len(gemma_adapter.clarifying_question(long)),
+                             diagnosis.MAX_QUESTION)
+
+    def test_selecting_one_makes_only_that_one_removable(self):
+        first = self.breaks(self.two)['supplied_target_ids'][0]
+        found = self.breaks(self.two, selected=first)
+        self.assertFalse(found['break_selection_required'])
+        self.assertEqual(found['removal_target_ids'], [first])
+        self.assertIsNone(found['suggested_question'])
+
+    def test_a_paragraph_with_one_removable_break_is_not_ambiguous(self):
+        found = self.breaks(self.one)
+        self.assertFalse(found['break_selection_required'])
+        self.assertEqual(found['removal_target_ids'], found['supplied_target_ids'])
+        self.assertEqual(len(found['removal_target_ids']), 1)
+
+    def test_the_schema_offers_a_question_but_no_removal(self):
+        ids = self.breaks(self.two)['supplied_target_ids']
+        schema = gemma_adapter.response_schema(self.hash, self.two, {self.two}, ids, [],
+                                               removal_break_ids=[])
+        ask = dict(self.guess(ids), status='needs_clarification', operations=[],
+                   question='Which page break do you mean?')
+        self.assertFalse(conforms(self.guess(ids), schema))
+        self.assertTrue(conforms(ask, schema))
+
+    def test_the_validator_refuses_a_guess_even_if_decoding_allowed_one(self):
+        ids = self.breaks(self.two)['supplied_target_ids']
+        with self.assertRaisesRegex(diagnosis.DiagnosisError, 'did not select'):
+            diagnosis.check(self.guess(ids), self.two, self.hash, {self.two},
+                            supplied_targets=set(ids), actionable_targets=set())
+        # Citing the same breaks while asking is a complete, valid answer.
+        ask = dict(self.guess(ids), status='needs_clarification', operations=[],
+                   question='Which page break do you mean?')
+        found = diagnosis.check(ask, self.two, self.hash, {self.two},
+                                supplied_targets=set(ids), actionable_targets=set())
+        self.assertEqual(found['status'], 'needs_clarification')
+        self.assertEqual(found['operations'], [])
 
 
 if __name__ == '__main__':

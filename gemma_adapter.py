@@ -73,13 +73,34 @@ def break_evidence(path, paragraph_id, break_target_id=None,
         sections = engine.inspect_sections(path)
     here = [record for record in report['breaks']
             if record['paragraph_id'] == paragraph_id]
-    selected = next((record for record in report['breaks']
-                     if record.get('target_id') == break_target_id), None)
+    # Look a selection up only when there is one. Matching `None` against records
+    # used to pick the first id-less record - a lastRenderedPageBreak - and report it
+    # to the model as the break the person selected when they had selected nothing.
+    selected = None if break_target_id is None else next(
+        (record for record in report['breaks']
+         if record.get('target_id') == break_target_id), None)
     if break_target_id is not None and selected is None:
         raise ValueError('The selected break is not in this document revision')
     offered = list(here)
     if selected is not None and selected not in offered:
         offered.append(selected)
+
+    # Which of the offered breaks a removal may name. Citing a break as evidence is
+    # always allowed; removing one is a decision about the writer's intent, so it is
+    # never left to the model to pick between candidates:
+    #   * the person selected a break        -> only that break
+    #   * nothing selected, one removable    -> the breaks in this paragraph, as before
+    #   * nothing selected, two or more      -> none; the only safe answer is a question
+    # The last case was measured: with both ids actionable, gemma4:e2b removed one of
+    # two breaks on "a page break in this paragraph should not be here".
+    eligible_here = [r for r in here if r.get('edit_eligible') and r.get('target_id')]
+    selection_required = selected is None and len(eligible_here) > 1
+    if selected is not None:
+        removable = [selected['target_id']] if selected.get('target_id') else []
+    elif selection_required:
+        removable = []
+    else:
+        removable = [r['target_id'] for r in here if r.get('target_id')]
     return {
         'breaks_in_selected_paragraph': here,
         'user_selected_break': selected,
@@ -88,9 +109,45 @@ def break_evidence(path, paragraph_id, break_target_id=None,
         'removable_break_types': report['removable_break_types'],
         'supplied_target_ids': sorted(r['target_id'] for r in offered
                                       if r.get('target_id')),
+        'removal_target_ids': sorted(removable),
+        'break_selection_required': selection_required,
+        'selection_note': (
+            'This paragraph holds %d removable breaks and the person has not selected '
+            'one. No break can be removed in this answer. If the complaint is about a '
+            'break, a new page or an empty page here, return needs_clarification and '
+            'ask which break they mean; suggested_question is one way to ask.'
+            % len(eligible_here)) if selection_required else None,
+        'suggested_question': (clarifying_question(eligible_here)
+                               if selection_required else None),
         'sections': _section_evidence(sections, section_target_id),
         'note': report['warning'],
     }
+
+
+def _snippet(text, limit=36, tail=True):
+    text = ' '.join((text or '').split())
+    if len(text) <= limit:
+        return text
+    return ('...' + text[-limit:].lstrip()) if tail else (text[:limit].rstrip() + '...')
+
+
+def clarifying_question(breaks):
+    """One question naming each candidate break by the words around it.
+
+    Deterministic, and only ever offered to the model: it is the model that decides
+    whether the complaint is about a break at all. Bounded by diagnosis.MAX_QUESTION.
+    """
+    kinds = sorted({b.get('break_type') or 'page' for b in breaks})
+    noun = '%s break' % kinds[0] if len(kinds) == 1 else 'break'
+    for limit in (36, 24, 14):
+        parts = ['the one after "%s"' % _snippet(b.get('text_before'), limit)
+                 for b in breaks]
+        question = 'Which %s do you mean: %s?' % (
+            noun, ', '.join(parts[:-1]) + ' or ' + parts[-1])
+        if len(question) <= diagnosis.MAX_QUESTION:
+            return question
+    return ('This paragraph has %d %ss. Which one do you mean? Select it in the '
+            'breaks list.' % (len(breaks), noun))
 
 
 def _section_evidence(sections, section_target_id=None):
@@ -134,6 +191,14 @@ def supplied_target_ids(path, paragraph_id, break_target_id=None,
     """The break and section ids a diagnosis for this selection may name."""
     found = break_evidence(path, paragraph_id, break_target_id, section_target_id)
     return (set(found['supplied_target_ids'])
+            | set(found['sections']['supplied_section_target_ids']))
+
+
+def actionable_target_ids(path, paragraph_id, break_target_id=None,
+                          section_target_id=None):
+    """The break and section ids an *operation* for this selection may name."""
+    found = break_evidence(path, paragraph_id, break_target_id, section_target_id)
+    return (set(found['removal_target_ids'])
             | set(found['sections']['supplied_section_target_ids']))
 
 
@@ -536,6 +601,59 @@ your reasoning step by step. Return the JSON object only.
 '''
 
 
+# Provenance for evaluation records. A live result is only comparable with another
+# measured under the same prompt, the same decoding schema and the same options, so
+# every run reports these alongside the model's own digest.
+#
+# SCHEMA_REVISION names the shape `response_schema` produces. "v3" is the revision
+# measured in TEST_RESULTS.md section 17.3: per-request ids and hash, the
+# status/operations rules as alternatives, and `status` decoded after the reasoning
+# fields. "v4" (this session) offers a break-removal shape only for the ids in
+# `removal_target_ids`, so none at all when the person must first choose between
+# breaks. Bump it whenever that function's output changes.
+#
+# The system prompt is deliberately the one measured with v3 (PROMPT_SHA256_V3):
+# two rewordings tried this session were measured live and did not help (see
+# TEST_RESULTS.md section 18), so the decoding and validation changes stand alone.
+SCHEMA_REVISION = 'v4'
+GENERATION_OPTIONS = {'temperature': 0}
+THINK = False
+PROMPT_SHA256_V3 = '25d265d57f4af0c112040fc8625f549a48c7a76718bfd09a8b34e0b4857cb908'
+
+
+def prompt_sha256():
+    """Digest of the diagnosis system prompt actually sent."""
+    return hashlib.sha256(DIAGNOSIS_SYSTEM.encode('utf-8')).hexdigest()
+
+
+def runtime_provenance(model, timeout=10):
+    """Ollama's version and the installed model's digest and details, as reported.
+
+    Read from the runtime rather than assumed, and left as None when it cannot be
+    read, so a result never claims a build it did not run on.
+    """
+    found = {'ollama_version': None, 'model': model, 'model_digest': None,
+             'model_details': None, 'generation_options': dict(GENERATION_OPTIONS),
+             'think': THINK, 'schema_revision': SCHEMA_REVISION,
+             'prompt_sha256': prompt_sha256()}
+    tags = _tags_url()
+    if tags is None:
+        return found
+    base = tags[:-len('/api/tags')]
+    try:
+        found['ollama_version'] = _get_json(base + '/api/version', timeout).get('version')
+    except Exception:
+        pass
+    try:
+        for entry in _get_json(tags, timeout).get('models') or []:
+            if entry.get('name') == model:
+                found['model_digest'] = entry.get('digest')
+                found['model_details'] = entry.get('details')
+    except Exception:
+        pass
+    return found
+
+
 def endpoint_url():
     return os.environ.get('GEMMA_URL', DEFAULT_URL)
 
@@ -613,7 +731,8 @@ def _object(properties):
             'required': list(properties), 'additionalProperties': False}
 
 
-def response_schema(source_sha256, selected_id, supplied_ids, break_ids, section_ids):
+def response_schema(source_sha256, selected_id, supplied_ids, break_ids, section_ids,
+                    removal_break_ids=None):
     """The diagnosis envelope as a JSON Schema, for Ollama's constrained decoding.
 
     `format: "json"` only promised *some* JSON, and the recorded structural runs
@@ -638,12 +757,17 @@ def response_schema(source_sha256, selected_id, supplied_ids, break_ids, section
         operations.append(_object({'paragraph_id': {'type': 'integer', 'enum': [selected_id]},
                                    'field': {'type': 'string', 'enum': [field]},
                                    'value': value}))
+    # Evidence may cite every break shown; a removal may name only the ids
+    # break_evidence made actionable. When the person must first choose between
+    # breaks, no removal shape is offered at all.
+    removal_break_ids = break_ids if removal_break_ids is None else removal_break_ids
     if break_ids:
         evidence.append(_object({'paragraph_id': {'type': 'integer', 'enum': paragraph_ids},
                                  'target_id': {'type': 'string', 'enum': sorted(break_ids)}}))
+    if removal_break_ids:
         operations.append(_object({
             'operation': {'type': 'string', 'enum': [engine.REMOVE_BREAK]},
-            'target_id': {'type': 'string', 'enum': sorted(break_ids)},
+            'target_id': {'type': 'string', 'enum': sorted(removal_break_ids)},
             'expected_break_type': {'type': 'string',
                                     'enum': list(diagnosis.REMOVABLE_BREAK_TYPES)}}))
     if section_ids:
@@ -747,18 +871,24 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1,
     targets = set(payload_evidence['explicit_breaks']['supplied_target_ids'])
     targets |= set(payload_evidence['explicit_breaks']['sections']
                    ['supplied_section_target_ids'])
+    # Of those, the ids an operation may name: never a break the person has not
+    # chosen when the paragraph holds more than one (see break_evidence).
+    actionable = set(payload_evidence['explicit_breaks']['removal_target_ids'])
+    actionable |= set(payload_evidence['explicit_breaks']['sections']
+                      ['supplied_section_target_ids'])
     supplied_ids.update(record['paragraph_id'] for record in
                         payload_evidence['explicit_breaks']['breaks_in_selected_paragraph'])
     timeout = DEFAULT_TIMEOUT if timeout is None else timeout
     schema = response_schema(
         payload_evidence['source_sha256'], paragraph_id, supplied_ids,
         payload_evidence['explicit_breaks']['supplied_target_ids'],
-        payload_evidence['explicit_breaks']['sections']['supplied_section_target_ids'])
+        payload_evidence['explicit_breaks']['sections']['supplied_section_target_ids'],
+        removal_break_ids=payload_evidence['explicit_breaks']['removal_target_ids'])
     payload = {'model': model, 'stream': False, 'format': schema,
                # No hidden chain of thought is requested: a reasoning trace would be
                # unverifiable, slower on CPU, and is not what the validator checks.
-               'think': False,
-               'options': {'temperature': 0},
+               'think': THINK,
+               'options': dict(GENERATION_OPTIONS),
                'messages': [{'role': 'system', 'content': DIAGNOSIS_SYSTEM},
                             {'role': 'user', 'content': json.dumps(
                                 {'complaint': complaint,
@@ -771,7 +901,7 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1,
                                      headers={'Content-Type': 'application/json'})
     started = time.monotonic()
     with observability.span('model.inference', model=model, mode='live',
-                            prompt_sha256=hashlib.sha256(DIAGNOSIS_SYSTEM.encode('utf-8')).hexdigest()) as trace:
+                            prompt_sha256=prompt_sha256()) as trace:
         data = _request_bytes(request, timeout)
         latency = round(time.monotonic() - started, 3)
         if len(data) > MAX_RESPONSE_BYTES:
@@ -788,6 +918,7 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1,
                 'break_target_id': break_target_id,
                 'section_target_id': section_target_id,
                 'supplied_target_ids': sorted(targets),
+                'actionable_target_ids': sorted(actionable),
                 'latency_seconds': latency, 'context_paragraphs': sorted(supplied_ids),
                 'prompt_eval_count': envelope.get('prompt_eval_count'),
                 'eval_count': envelope.get('eval_count'),
@@ -795,7 +926,8 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1,
     with observability.span('diagnosis.validate'):
         found = diagnosis.parse(content, paragraph_id,
                                 payload_evidence['source_sha256'], supplied_ids,
-                                supplied_targets=targets)
+                                supplied_targets=targets,
+                                actionable_targets=actionable)
     return found, metadata
 
 

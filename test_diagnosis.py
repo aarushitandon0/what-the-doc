@@ -60,8 +60,9 @@ class AcceptedShapeTests(unittest.TestCase):
     def test_evidence_may_cite_a_resolved_but_uneditable_field(self):
         # contextual_spacing explains a spacing complaint without being repairable.
         found = check(evidence=[{'paragraph_id': 1, 'field': 'contextual_spacing'},
-                                {'paragraph_id': 2, 'field': 'space_before_pt'}])
-        self.assertEqual(len(found['evidence']), 2)
+                                {'paragraph_id': 2, 'field': 'space_before_pt'},
+                                {'paragraph_id': 1, 'field': 'space_before_pt'}])
+        self.assertEqual(len(found['evidence']), 3)
 
 
 class EmptyPlanTests(unittest.TestCase):
@@ -121,10 +122,110 @@ class RejectedShapeTests(unittest.TestCase):
         with self.assertRaises(diagnosis.DiagnosisError):
             check(evidence=[{'paragraph_id': True, 'field': 'space_before_pt'}])
 
-    def test_duplicate_evidence_is_rejected(self):
+    def abstain(self, evidence, status='no_change'):
+        question = 'Which part looks wrong?' if status == 'needs_clarification' else None
+        return check(status=status, operations=[], evidence=evidence, question=question)
+
+    def test_an_abstentions_exact_duplicate_evidence_is_dropped_keeping_the_first(self):
+        # A citation list says which inputs were relied on; citing one twice adds
+        # nothing, and Ollama's grammar path does not enforce uniqueItems. In an
+        # abstention the repeat is dropped, the first occurrence and the order are
+        # kept, and the count is reported so a normalised answer never looks untouched.
+        spacing = {'paragraph_id': 1, 'field': 'space_before_pt'}
+        peer = {'paragraph_id': 0, 'field': 'space_before_pt'}
+        for status in ('no_change', 'unsupported', 'needs_clarification'):
+            with self.subTest(status=status):
+                found = self.abstain([spacing, peer, dict(spacing), dict(peer),
+                                      dict(spacing)], status)
+                self.assertEqual(found['status'], status)
+                self.assertEqual(found['evidence'], [spacing, peer])
+                self.assertEqual(found['evidence_duplicates_removed'], 3)
+                self.assertEqual(found['operations'], [])
+
+    def test_a_proposal_with_duplicate_evidence_is_still_rejected(self):
+        # Kept deliberately. Measured live, normalising repeats in proposals let
+        # answers through that the refusal had been stopping, and one wrong repair
+        # reached review. Normalisation must never move a repair toward approval.
         entry = {'paragraph_id': 1, 'field': 'space_before_pt'}
-        with self.assertRaises(diagnosis.DiagnosisError):
+        with self.assertRaisesRegex(diagnosis.DiagnosisError, 'duplicate evidence'):
             check(evidence=[entry, dict(entry)])
+
+    def test_an_answer_without_duplicates_reports_none_removed(self):
+        self.assertEqual(check()['evidence_duplicates_removed'], 0)
+        self.assertEqual(self.abstain([])['evidence_duplicates_removed'], 0)
+
+    def test_normalisation_changes_nothing_but_the_evidence_list(self):
+        entry = {'paragraph_id': 1, 'field': 'alignment'}
+        once, twice = self.abstain([entry]), self.abstain([entry, dict(entry)])
+        for key in ('status', 'operations', 'source_sha256', 'question', 'evidence',
+                    'explanation'):
+            self.assertEqual(once[key], twice[key])
+
+    def test_an_abstention_still_may_not_carry_operations(self):
+        entry = {'paragraph_id': 1, 'field': 'space_before_pt'}
+        with self.assertRaisesRegex(diagnosis.DiagnosisError, 'must carry no operations'):
+            check(status='no_change', evidence=[entry, dict(entry)])
+
+    def test_different_evidence_is_never_merged(self):
+        a = {'paragraph_id': 1, 'field': 'space_before_pt'}
+        b = {'paragraph_id': 1, 'field': 'space_after_pt'}
+        c = {'paragraph_id': 2, 'field': 'space_before_pt'}
+        for found in (check(evidence=[a, b, c]), self.abstain([a, b, c])):
+            self.assertEqual(found['evidence'], [a, b, c])
+            self.assertEqual(found['evidence_duplicates_removed'], 0)
+
+    def test_a_repeated_entry_that_is_invalid_still_fails(self):
+        # Structure is validated on every entry before anything is dropped, so a
+        # repeat cannot hide a fabricated citation behind a valid first copy.
+        good = {'paragraph_id': 1, 'field': 'space_before_pt'}
+        for bad in ({'paragraph_id': 99, 'field': 'space_before_pt'},
+                    {'paragraph_id': 1, 'field': 'font_size_pt'},
+                    {'paragraph_id': True, 'field': 'space_before_pt'},
+                    {'paragraph_id': 1.0, 'field': 'space_before_pt'},
+                    {'paragraph_id': 1, 'field': 'space_before_pt', 'weight': 2},
+                    {'paragraph_id': 1, 'field': ['space_before_pt']},
+                    'paragraph 1'):
+            with self.subTest(bad=bad), self.assertRaises(diagnosis.DiagnosisError):
+                self.abstain([good, bad, dict(good)])
+
+    def test_near_duplicates_are_not_treated_as_exact(self):
+        # True == 1 in Python; the type check must refuse it rather than let it be
+        # folded into the genuine paragraph-1 citation.
+        good = {'paragraph_id': 1, 'field': 'space_before_pt'}
+        with self.assertRaises(diagnosis.DiagnosisError):
+            self.abstain([good, {'paragraph_id': True, 'field': 'space_before_pt'}])
+
+    def test_too_many_entries_fail_even_when_they_are_all_the_same(self):
+        # The size bound applies to what the model sent, so a degenerate repetition
+        # loop is still refused rather than collapsed into one tidy citation.
+        entry = {'paragraph_id': 1, 'field': 'space_before_pt'}
+        with self.assertRaises(diagnosis.DiagnosisError) as caught:
+            self.abstain([dict(entry) for _ in range(diagnosis.MAX_EVIDENCE + 1)])
+        self.assertIn('at most', str(caught.exception))
+
+    def test_every_changed_property_must_be_cited(self):
+        # The live injection answer: cited alignment, changed five properties.
+        with self.assertRaisesRegex(diagnosis.DiagnosisError, 'does not cite'):
+            check(evidence=[{'paragraph_id': 1, 'field': 'alignment'}],
+                  operations=[{'paragraph_id': 1, 'field': 'alignment', 'value': 'both'},
+                              {'paragraph_id': 1, 'field': 'left_indent_pt', 'value': 144}])
+
+    def test_citing_a_peer_does_not_cover_the_selected_paragraph(self):
+        with self.assertRaisesRegex(diagnosis.DiagnosisError, 'does not cite'):
+            check(evidence=[{'paragraph_id': 0, 'field': 'space_before_pt'}])
+
+    def test_each_cited_change_is_accepted(self):
+        found = check(evidence=[{'paragraph_id': 1, 'field': 'alignment'},
+                                {'paragraph_id': 1, 'field': 'space_before_pt'},
+                                {'paragraph_id': 0, 'field': 'space_before_pt'}],
+                      operations=[{'paragraph_id': 1, 'field': 'alignment', 'value': 'both'},
+                                  {'paragraph_id': 1, 'field': 'space_before_pt',
+                                   'value': 12}])
+        self.assertEqual(len(found['operations']), 2)
+
+    def test_a_proposal_still_needs_evidence(self):
+        with self.assertRaises(diagnosis.DiagnosisError):
+            check(evidence=[])
 
     def test_an_operation_outside_the_selected_paragraph_is_rejected(self):
         with self.assertRaises(diagnosis.DiagnosisError) as caught:

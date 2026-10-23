@@ -511,6 +511,25 @@ control, not after.
 **An evidence entry has either `field` or `target_id`, never both.** The second form
 cites one identified break.
 
+**In an abstention, exact repeats in `evidence` are dropped, and counted.** A
+citation identical in every key and type to an earlier one adds nothing, so for
+`no_change`, `unsupported` and `needs_clarification` the validator keeps the first
+occurrence, preserves the order, and reports how many it dropped in
+`diagnosis.evidence_duplicates_removed` (0 when none). A `proposed` answer with a
+repeated citation is still refused as `invalid_response`: measured live, normalising
+those let through proposals the refusal had been stopping, including one wrong repair
+that reached review (`TEST_RESULTS.md` section 18). Every entry is validated before
+anything is dropped, a list longer than 8 entries is still refused even when the
+entries repeat, and the same break id cited under two different paragraphs is refused
+as conflicting. Nothing is matched loosely: `true` is not paragraph 1.
+
+**A removal may name only a break the person chose.** When a break is selected
+(`break_target_id`), only that break may be removed. When none is selected and the
+paragraph holds two or more removable breaks, no removal is accepted at all - the
+answer must be `needs_clarification` (or another abstention), and an operation naming
+either break is refused with `invalid_response`. Every break shown may still be cited
+as evidence.
+
 **`rendering_required` with `rendering_satisfied: false` cannot be accepted or
 downloaded.** An explicit-break removal changes document structure, so both the
 original and the candidate must have rendered successfully first. The job reports

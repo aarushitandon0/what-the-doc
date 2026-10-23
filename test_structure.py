@@ -726,6 +726,46 @@ class DiagnosisSchemaTest(BreakFixtureCase):
             self.check(self.answer(
                 evidence=[{'paragraph_id': 2, 'target_id': 'brk-cccccccccccccccc'}]))
 
+    def asking(self, evidence):
+        return self.answer(status='needs_clarification', operations=[],
+                           evidence=evidence, question='Which break do you mean?')
+
+    def test_an_exact_repeat_of_a_break_citation_is_dropped_from_a_question(self):
+        cited = {'paragraph_id': 2, 'target_id': 'brk-aaaaaaaaaaaaaaaa'}
+        found = self.check(self.asking([cited, dict(cited)]))
+        self.assertEqual(found['evidence'], [cited])
+        self.assertEqual(found['evidence_duplicates_removed'], 1)
+
+    def test_a_break_removal_with_a_repeated_citation_is_still_refused(self):
+        cited = {'paragraph_id': 2, 'target_id': 'brk-aaaaaaaaaaaaaaaa'}
+        with self.assertRaisesRegex(diagnosis.DiagnosisError, 'duplicate evidence'):
+            self.check(self.answer(evidence=[cited, dict(cited)]))
+
+    def test_one_break_cited_under_two_paragraphs_is_refused_as_conflicting(self):
+        # A break belongs to exactly one paragraph. The same id under two different
+        # paragraph ids is a contradiction, not a repeat, and is never merged.
+        conflicting = [{'paragraph_id': 2, 'target_id': 'brk-aaaaaaaaaaaaaaaa'},
+                       {'paragraph_id': 3, 'target_id': 'brk-aaaaaaaaaaaaaaaa'}]
+        for raw in (self.answer(evidence=conflicting), self.asking(conflicting)):
+            with self.subTest(status=raw['status']):
+                with self.assertRaisesRegex(diagnosis.DiagnosisError, 'conflicting'):
+                    diagnosis.check(raw, 2, 'b' * 64, supplied_ids={2, 3},
+                                    supplied_targets=('brk-aaaaaaaaaaaaaaaa',))
+
+    def test_a_repeated_citation_of_an_unsupplied_break_still_fails(self):
+        cited = {'paragraph_id': 2, 'target_id': 'brk-aaaaaaaaaaaaaaaa'}
+        invented = {'paragraph_id': 2, 'target_id': 'brk-cccccccccccccccc'}
+        with self.assertRaisesRegex(diagnosis.DiagnosisError, 'cites break'):
+            self.check(self.asking([cited, invented, dict(invented)]))
+
+    def test_an_exact_repeat_of_a_section_citation_is_dropped(self):
+        cited = {'section_id': 'sec-aaaaaaaaaaaaaaaa'}
+        found = diagnosis.check(self.answer(
+            status='no_change', operations=[], evidence=[cited, dict(cited)]),
+            2, 'b' * 64, supplied_ids={2}, supplied_targets=('sec-aaaaaaaaaaaaaaaa',))
+        self.assertEqual(found['evidence'], [cited])
+        self.assertEqual(found['evidence_duplicates_removed'], 1)
+
     def test_only_one_break_may_be_removed_at_a_time(self):
         with self.assertRaisesRegex(diagnosis.DiagnosisError, 'at most 1 break removal'):
             self.check(self.answer(operations=[

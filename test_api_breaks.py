@@ -192,6 +192,50 @@ class BreakSelectionTests(BreakApiBase):
         self.assertEqual(started.json()['error_code'], 'invalid_response')
 
 
+    def test_no_break_may_be_removed_when_two_are_present_and_none_is_selected(self):
+        """Measured live: given both ids, gemma4:e2b removed one of two breaks."""
+        record = self.document()
+        here = [b for b in self.removable(record['document_id'])
+                if b['paragraph_id'] == self.two_breaks]
+        for guessed in here:
+            with self.subTest(ordinal=guessed['ordinal_in_paragraph']):
+                started = self.start(record['document_id'], self.two_breaks,
+                                     'There is a page break in this paragraph that '
+                                     'should not be here.',
+                                     break_removal(guessed['target_id'], self.two_breaks,
+                                                   record['source_sha256']))
+                self.assertEqual(started.status_code, 400, started.text)
+                self.assertEqual(started.json()['error_code'], 'invalid_response')
+                self.assertIn('did not select', started.json()['detail'])
+
+    def test_asking_which_break_is_accepted_in_that_state(self):
+        record = self.document()
+        here = [b for b in self.removable(record['document_id'])
+                if b['paragraph_id'] == self.two_breaks]
+        started = self.start(record['document_id'], self.two_breaks,
+                             'There is a page break in this paragraph that should not '
+                             'be here.',
+                             {'status': 'needs_clarification',
+                              'explanation': 'This paragraph holds two page breaks.',
+                              'evidence': [{'paragraph_id': self.two_breaks,
+                                            'target_id': b['target_id']} for b in here],
+                              'source_sha256': record['source_sha256'],
+                              'operations': [], 'question': 'Which break do you mean?'})
+        self.assertEqual(started.status_code, 202, started.text)
+
+    def test_with_one_break_selected_the_other_in_its_paragraph_cannot_be_removed(self):
+        record = self.document()
+        first, second = [b for b in self.removable(record['document_id'])
+                         if b['paragraph_id'] == self.two_breaks]
+        started = self.start(record['document_id'], self.two_breaks,
+                             'Remove the break I selected.',
+                             break_removal(second['target_id'], self.two_breaks,
+                                           record['source_sha256']),
+                             break_target_id=first['target_id'])
+        self.assertEqual(started.status_code, 400, started.text)
+        self.assertEqual(started.json()['error_code'], 'invalid_response')
+
+
 class UnrenderedBreakTests(BreakApiBase):
     """Without a rendering, a break removal must not become reviewable or acceptable."""
 

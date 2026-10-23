@@ -231,6 +231,9 @@ def _public_job(job):
             'explanation': found['explanation'],
             'evidence': found['evidence'],
             'question': found['question'],
+            # Exact repeats the validator dropped from the model's evidence list, so a
+            # normalised answer is never presented as if it arrived that way.
+            'evidence_duplicates_removed': found.get('evidence_duplicates_removed', 0),
         }
         if found['operations']:
             # After preparation, show exactly the writes used for this candidate.
@@ -858,18 +861,22 @@ def _fixture_diagnoser(fixture, paragraph_id, source_sha256, source_path=None,
         raise ApiError(400, diagnosis.INVALID_RESPONSE, 'fixture_diagnosis must be an object')
     # A break id in an injected answer is checked against the document exactly as a
     # model's would be: an injected diagnosis has a different origin, never more power.
-    targets = ()
+    targets = actionable = ()
     if source_path is not None:
         try:
             targets = gemma_adapter.supplied_target_ids(source_path, paragraph_id,
                                                         break_target_id,
                                                         section_target_id)
+            actionable = gemma_adapter.actionable_target_ids(source_path, paragraph_id,
+                                                             break_target_id,
+                                                             section_target_id)
         except Exception:                              # pragma: no cover - defensive
-            targets = ()
+            targets = actionable = ()
     try:
         found = diagnosis.check(fixture, paragraph_id, source_sha256,
                                 supplied_ids=_citable_ids(fixture),
-                                supplied_targets=targets)
+                                supplied_targets=targets,
+                                actionable_targets=actionable)
     except diagnosis.DiagnosisError as error:
         raise ApiError(400, error.code, error.message)
 

@@ -217,6 +217,28 @@ class JobStateTests(ApiBase):
         self.assertEqual(job['mode'], api.FIXTURE)
         self.assertFalse(job['is_live_model_answer'])
 
+    def test_repeated_evidence_in_an_abstention_is_normalised_and_counted(self):
+        document_id = self.uploaded_id()
+        answer = abstention(self.sample_sha, 'no_change')
+        cited = {'paragraph_id': self.spacing_id, 'field': 'space_before_pt'}
+        answer['evidence'] = [cited, dict(cited)]
+        started = self.start(document_id, self.spacing_id, 'Looks odd.', answer)
+        self.assertEqual(started.status_code, 202, started.text)
+        job = self.settled(started.json()['job_id'])
+        self.assertEqual(job['state'], api.NO_SUPPORTED_REPAIR)
+        self.assertEqual(job['diagnosis']['evidence'], [cited])
+        self.assertEqual(job['diagnosis']['evidence_duplicates_removed'], 1)
+        self.assertIsNone(job['candidate'])
+
+    def test_a_proposal_with_repeated_evidence_is_refused(self):
+        document_id = self.uploaded_id()
+        answer = proposal(self.spacing_id, self.sample_sha)
+        answer['evidence'] = answer['evidence'] * 2
+        started = self.start(document_id, self.spacing_id,
+                             'Too much space above this heading.', answer)
+        self.assertEqual(started.status_code, 400, started.text)
+        self.assertEqual(started.json()['error_code'], 'invalid_response')
+
     def test_no_change_maps_to_no_supported_repair_with_no_candidate(self):
         document_id = self.uploaded_id()
         started = self.start(document_id, self.spacing_id, 'Looks odd.',
