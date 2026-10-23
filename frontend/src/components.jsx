@@ -104,9 +104,13 @@ export function BreakSelector({report, paragraphId, selectedId, onSelect, disabl
  if(!report) return null;
  const all=report.breaks||[];
  const here=all.filter(b=>b.paragraph_id===paragraphId);
- const elsewhere=all.length-here.length;
+ // Breaks in a table or content control have no paragraph to select, so they are
+ // named here rather than folded silently into the "elsewhere" count.
+ const outside=all.filter(b=>b.paragraph_id==null);
+ const elsewhere=all.length-here.length-outside.length;
+ const outsideNote=outside.length?<p className="fineprint break-outside">{outside.length} break{outside.length===1?'':'s'} inside {[...new Set(outside.map(b=>({tbl:'a table',sdt:'a content control'})[b.container]||'another container'))].join(' and ')}: listed, not removable by this version.</p>:null;
  if(!here.length) return <div className="break-panel"><span className="eyebrow">EXPLICIT BREAKS</span>
-  <p className="fineprint">No page or column break element in this paragraph.{elsewhere?` ${elsewhere} elsewhere in the document.`:''} A “page break before” paragraph setting is a different thing and is listed with the properties above.</p></div>;
+  <p className="fineprint">No page or column break element in this paragraph.{elsewhere?` ${elsewhere} elsewhere in the document.`:''} A “page break before” paragraph setting is a different thing and is listed with the properties above.</p>{outsideNote}</div>;
  return <div className="break-panel"><span className="eyebrow">EXPLICIT BREAKS IN THIS PARAGRAPH</span>
   <ul className="break-list">
    {here.map((b,i)=>{
@@ -127,7 +131,7 @@ export function BreakSelector({report, paragraphId, selectedId, onSelect, disabl
       {b.edit_eligible?null:<small className="break-reason">{b.ineligible_reason}</small>}
      </button></li>;})}
   </ul>
-  <p className="fineprint">{elsewhere?`${elsewhere} more break${elsewhere===1?'':'s'} elsewhere in this document. `:''}Selecting a break says which one you mean. It is not a request to remove it, and a break you inserted on purpose is not a fault.</p></div>;
+  <p className="fineprint">{elsewhere?`${elsewhere} more break${elsewhere===1?'':'s'} elsewhere in this document. `:''}Selecting a break says which one you mean. It is not a request to remove it, and a break you inserted on purpose is not a fault.</p>{outsideNote}</div>;
 }
 
 /** What a proposal is actually about to delete, shown before any approval. */
@@ -149,7 +153,9 @@ export function PageCountChange({job}){
  const delta=c.page_count_delta;
  return <p className="page-delta"><strong>{c.before_pages} page{c.before_pages===1?'':'s'} → {c.after_pages} page{c.after_pages===1?'':'s'}</strong>{' '}
   {delta===0
-   ?'The page count is unchanged. The document reflowed without losing a page, which is a normal result: removing a break does not have to change how many pages there are.'
+   ?(job.operation_kind==='explicit_break_removal'
+    ?'The page count is unchanged. The document reflowed without losing a page, which is a normal result: removing a break does not have to change how many pages there are.'
+    :'The page count is unchanged.')
    :`${delta<0?'One or more pages fewer':'More pages'} (${delta>0?'+':''}${delta}). A page-count change is something to look at, not an approval.`}</p>;
 }
 
@@ -186,4 +192,18 @@ export function SectionTargetList({job}){
    <span className="break-context"><i>{t.governs}</i></span>
    <small>Only the <code>w:type</code> of this one <code>w:sectPr</code> is rewritten. The number of sections, where each one begins and ends, its columns, page size, margins, numbering, headers and footers all stay exactly as they are. Continuous asks the section to continue on the same page; it does not guarantee a page disappears, because page geometry and other settings can still force one.</small>
   </div>)}</div>;
+}
+/* A rendering error used to blank the whole page. The job and the original live on
+ * the local service, not in this tab, so the honest message is that the screen
+ * failed, not the document. */
+export class ScreenFailed extends React.Component{
+ constructor(props){super(props);this.state={failed:false};}
+ static getDerivedStateFromError(){return {failed:true};}
+ render(){
+  if(!this.state.failed)return this.props.children;
+  return <main id="main" className="page"><div className="empty-panel" role="alert"><AlertCircle/>
+   <h2>This screen failed to draw.</h2>
+   <p>Nothing was accepted or downloaded because of it. Your original file is never written to, and a job you started is still held by the local service.</p>
+   <div className="component-row"><Button onClick={()=>{window.location.hash='history';window.location.reload();}}>Reload at My documents</Button></div></div></main>;
+ }
 }

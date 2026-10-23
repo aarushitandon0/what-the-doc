@@ -137,9 +137,12 @@ behind it. It cannot open a real document, cannot render a page and cannot produ
 ### No secrets in `VITE_*`
 
 Every `VITE_*` variable is **substituted into the public JavaScript bundle at build
-time**. Anyone can read it with View Source. No DSN, no API key, no token. This
-project's frontend has no Sentry integration at all, which is the simplest way to be
-sure.
+time**. Anyone can read it with View Source. No API key, no token, and never the
+backend's Sentry DSN. The one exception is `VITE_SENTRY_DSN`, which is optional and
+must be a *separate browser project's* DSN: a browser DSN only permits submitting
+events and is public by design, so restrict it with that project's allowed domains
+and rate limits. Leave it unset and the hosted page loads no Sentry code at all. See
+[SENTRY_SETUP.md](SENTRY_SETUP.md).
 
 ### Verified facts about this repository's layout
 

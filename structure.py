@@ -247,8 +247,52 @@ def _last_rendered_record(paragraph, paragraph_id, element, run_map):
     }
 
 
+def _outside_paragraph_records(root):
+    """Explicit breaks in body-level containers that are not paragraphs (w:tbl, w:sdt).
+
+    Their paragraphs have no id in this version, so the walk over body paragraphs
+    never reached them and a break in a table cell was simply not reported. They are
+    listed, never editable and carry no target_id, so nothing here can be selected,
+    sent to a model or removed.
+    """
+    body = root.find(q('body'))
+    records = []
+    for container in ([] if body is None else body):
+        if container.tag in (q('p'), q('sectPr')):
+            continue
+        for element in container.iter(q('br')):
+            resolved, raw = _break_type(element)
+            paragraph = next((a for a in element.iterancestors(q('p'))), None)
+            before, after = (_text_around(paragraph, element) if paragraph is not None
+                             else ('', ''))
+            records.append({
+                'kind': 'explicit_break',
+                'break_type': resolved,
+                'break_type_raw': raw,
+                'paragraph_id': None,
+                'container': _local(container),
+                'style_id': None if paragraph is None else _style_of(paragraph),
+                'run_index': None,
+                'break_index_in_run': None,
+                'ordinal_in_paragraph': None,
+                'edit_eligible': False,
+                'ineligible_reason': (
+                    'The break sits inside <w:%s>, outside the top-level body paragraphs '
+                    'this version edits, so it is listed and will not be removed.'
+                    % _local(container)),
+                'text_before': before,
+                'text_after': after,
+                'run_has_properties': element.getparent() is not None
+                and element.getparent().find(q('rPr')) is not None,
+                'runs_in_paragraph': None,
+                'target_id': None,
+            })
+    return records
+
+
 def locate_breaks(root, source_sha256, paragraphs):
-    """Every w:br and w:lastRenderedPageBreak under the supplied body paragraphs.
+    """Every w:br and w:lastRenderedPageBreak under the supplied body paragraphs, plus
+    the explicit breaks in body-level tables and content controls, listed as refused.
 
     Returns (records, elements) where `elements[target_id]` is the live lxml element
     for each record that carries one. The element map is for `engine.apply`; callers
@@ -274,6 +318,7 @@ def locate_breaks(root, source_sha256, paragraphs):
             elif element.tag == q('lastRenderedPageBreak'):
                 records.append(_last_rendered_record(paragraph, paragraph_id,
                                                      element, run_map))
+    records.extend(_outside_paragraph_records(root))
     return records, elements
 
 

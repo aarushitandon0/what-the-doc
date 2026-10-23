@@ -1437,3 +1437,291 @@ assets, 301.93 kB JS (90.21 kB gzip), 28.84 kB CSS. See
 to any earlier run's total, and the browser, rendered-demonstration, Word and
 live-model results in sections 12 to 15 are separate evidence of separate kinds,
 counted separately.
+
+## 17. End-to-end verification, Sentry error reporting and constrained decoding — 23 October 2026
+
+Everything in this section was run in this session, on this machine (Windows 11,
+12 logical CPUs, Python 3.14.6, Ollama 0.40.8, `gemma4:e2b`, the bundled
+LibreOffice, Chromium 153.0.8010.12 via the vendored `playwright-core`). Evidence
+lives under `work/session3/` (git-ignored, like every earlier session's `work/`).
+Live-model results, injected-diagnosis results and unit tests are kept apart.
+
+### 17.1 Renderer timeouts: investigated, not reproduced, and made self-reporting
+
+Section 16 attributed a rendered-test failure to "a renderer timeout under CPU
+contention". That was never established: the test printed only the reject call's
+409, not the job's `error_code` / `error_detail`. Measured this session against
+`03-manual-page-break.docx` and `05-section-next-page.docx`, with throwaway probe
+scripts calling `render.docx_to_pdf` directly:
+
+| Condition | Per-conversion wall time | Failures |
+| --- | --- | --- |
+| idle, shipped `docx_to_pdf` (fresh profile each call) | 8.2–11.4 s | 0 |
+| idle, one reused profile | 6.3–7.2 s after the first | 0 |
+| 4 concurrent | 28.5–28.7 s | 0 |
+| 4 concurrent + 12 full-core CPU burners | 71.5–85.2 s | 0 |
+| 8 concurrent + 12 burners | 98.2–105.9 s | 0 |
+| 2 concurrent during live Gemma generation | 59.2 s | 0 |
+| 4 concurrent + 6 burners during live Gemma generation | 84.2–85.4 s | 0 |
+
+The ceiling is 180 s, and nothing came near it. Five trials also checked whether
+`soffice.bin` outlives the launcher, which would break the profile clean-up. It never
+did. **Conclusion: a 180 s timeout is not a plausible cause under any load reproduced
+here.** The cause of the 21 October failure remains unknown, because it was not
+recorded. Two changes make the next one diagnosable:
+
+- `reviewable()` in `test_api_breaks` and `test_api_sections` now asserts
+  `awaiting_review` with the job's `error_code` and `error_detail` in the message.
+- A failing renderer now raises a Sentry error event (`render.failure`) carrying the
+  exception class and this project's own frames (section 17.6).
+
+The full suite was then run **while live Gemma inference was competing for the CPU**
+(17.7), and both rendered API modules passed: `test_api_breaks` (22 tests, 700 s) and
+`test_api_sections` (19 tests, 445 s).
+
+### 17.2 Defects found and fixed this session
+
+1. **Breaks inside a table were invisible.** `CAPABILITIES.md` promised they are
+   "*listed*, with the element that disqualifies them, and refused", but the inspector
+   only walked top-level body paragraphs. A `w:br` in a body-level `w:tbl`/`w:sdt` was
+   not reported at all, and `break_count` under-counted. It is now listed with
+   `paragraph_id: null`, `container`, `target_id: null` and `edit_eligible: false`, and
+   the interface names it: "1 break inside a table: listed, not removable by this
+   version". It also joins the preservation census, so a candidate that lost it would
+   now fail the invariant check. In `test-documents/manifest.json`, only the `breaks`
+   field of `03-manual-page-break.docx` was refreshed (6 → 7 entries); no document
+   bytes, hashes or ids changed.
+2. **The live model could not produce a valid structural answer** (section 15.7).
+   See 17.3.
+3. **An unhandled API exception returned plain text with no `error_code`.** It is now
+   a coded `500 {"error_code": "internal_error"}` that never echoes the message.
+4. **A render crash blanked the whole page** (there was no React error boundary). It
+   now shows "This screen failed to draw" with a way back.
+5. **Browser Sentry silently dropped every uncaught error.** Found by the wire test in
+   17.6 and fixed.
+6. **Review copy was wrong for non-spacing repairs.** The live review heading always
+   said "Better breathing room." (the spacing sample's line), the page header said
+   "1 pages", and a paragraph change with an unchanged page count was told "removing a
+   break does not have to change how many pages there are". Each now matches the
+   operation. The last of these was fixed after the final live browser pass and is
+   covered by the jsdom suite only.
+7. `SENTRY_SETUP.md` named transactions `job.accept` / `job.reject` / `job.download`;
+   the code and the captured wire traffic use `review.accept`, `review.reject` and
+   `download.execute`.
+
+### 17.3 Constrained decoding, and what it did to the live model
+
+`format: "json"` only guarantees *some* JSON. `gemma_adapter.response_schema` now sends
+Ollama a per-request JSON Schema containing:
+
+- the paragraph and target ids actually supplied
+- the exact `source_sha256`
+- the closed operation shapes and value bounds
+- the status/operations rules, as three alternatives
+
+`diagnosis.check` and `engine.validate` still run on every answer. The adapter already
+sent `think: false`, which is the mode in which Ollama applies a schema from the first
+token (see *Ollama skips your JSON schema when a thinking model answers without
+thinking*, The Homelab Postmortem, dev.to). The system prompt is unchanged.
+
+Three schema revisions were measured on the same five live structural cases, using
+`work/session3/live_break_case.py` and `live_section_case.py`. These are copies of the
+session 1/2 scripts with only the output folder and default model changed.
+
+| Case (correct answer) | `format: "json"` (15.7) | v1: shapes only | v2: + status rules | **v3: + reason before status** |
+| --- | --- | --- | --- | --- |
+| break selected (propose) | `invalid_response` | `unsupported` | `no_change` | **proposed**, rendered 6 → 5 pages, invariants clean |
+| break ambiguous (`needs_clarification`) | `invalid_response` | `invalid_response` | `no_change` | `no_change` (wrong, safe) |
+| section supported (propose) | — | `invalid_response` | `unsupported` | **proposed**, rendered 2 → 1 page, invariants clean |
+| section intentional (abstain) | — | `invalid_response` | `unsupported` ✓ | `invalid_response`: duplicate evidence entry (failed closed) |
+| section odd-page (abstain) | — | `no_change` ✓ | `no_change` ✓ | `no_change` ✓ |
+
+Files: `live-*-cases.schema-v1.json`, `live-*-cases.schema-v2.json`, and the unsuffixed
+v3 files.
+
+**Why v3.** The v2 browser pass returned `unsupported` on the canonical 48 pt spacing
+case. A controlled probe showed why. It used the same document, prompt and model, with
+only `format` varied (`work/session3/schema_probe.py`, results in
+`schema-probe.jsonl`):
+
+| `format` sent | spacing ¶1 | alignment ¶10 |
+| --- | --- | --- |
+| `"json"` (the code before this session) | `invalid_response`: `{"paragraph_id": …, "space_before_pt": …}` | — |
+| v2 schema | `no_change`; the raw key order begins with `status` | — |
+| v2 without length caps | `invalid_response`: explanation over 400 chars | — |
+| **v3 (status after explanation, evidence, operations)** | **proposed `space_before_pt` 12** | **proposed `alignment` both** |
+
+With `status` first, the model committed to an abstention on its first token, then
+argued for the repair in the explanation. Two things follow:
+
+- The schema was not a regression. With the current prompt, bare `format: "json"`
+  already failed this case.
+- Decoding order matters. v3 is what ships, with a unit test pinning `status` after
+  the reasoning fields.
+
+**What this does not show.** Five structural cases and two paragraph probes, one run
+each at temperature 0, are observations, not a benchmark. The historical 8/10 figure
+was not re-run and is not superseded.
+
+The intermittent `duplicate evidence entry` was seen twice in v3: once on the
+intentional section and once on alignment ¶10 in the browser. It is the validator
+correctly refusing a repeated citation. JSON Schema `uniqueItems` is not something this
+grammar path enforces. Whether the validator should de-duplicate rather than refuse is
+a product decision, left open.
+
+### 17.4 The real application in a real browser
+
+`work/session3/browser_e2e.cjs` drives the **production bundle** (`vite preview`) in
+headless Chromium through the whole workflow:
+
+1. upload
+2. paragraph, break or section selection, and the complaint
+3. diagnosis
+4. review with server-rendered previews
+5. accept or reject
+6. **download through the interface's own link** (a Playwright download event, not an
+   API call)
+
+`verify_downloads.py` then inspects the saved bytes offline. Every run also records
+page errors, any request to another origin, whether the Sentry chunk was requested,
+and horizontal overflow at 390 px.
+
+**Pass A: fully live, final code.** `api.py` ran on 8031 with
+`GEMMA_MODEL=gemma4:e2b`, the real renderer, fixture mode **off** and **no
+`SENTRY_DSN`**. Nothing was injected. Summary: `work/session3/browser-live/summary.json`.
+
+| Scenario | Model (live) | Human | Diag. | Previews | Offline check of the downloaded file |
+| --- | --- | --- | --- | --- | --- |
+| spacing ¶1, `01` | proposed | **accept** | 62 s | 4 → 4 pages, 8 images | bytes = reviewed candidate; text identical; other parts byte-identical; only ¶1 changed: `space_before_pt` 48 → 12 |
+| alignment ¶10, `01` | `invalid_response` (duplicate evidence) | — | 33 s | none | no review, accept or download offered; original unchanged |
+| page break 2 in ¶2, `03` | proposed | **accept** | 87 s | 6 → 5 pages | bytes = candidate; only ¶2 changed; breaks 6 → 5 (including the table one); text identical |
+| column break ¶2, `04` | proposed | **reject** | 83 s | 2 → 2 pages | download 409 before and after; job `rejected`; original unchanged |
+| section 2, `05` | proposed | **accept** | 63 s | 2 → 1 page | bytes = candidate; only the final `sectPr` changed; `[nextPage, nextPage]` → `[nextPage, continuous]` |
+| intentional section, `07`, complaint about spacing | **`no_change`: correct refusal** | — | 38 s | none | no candidate; original unchanged |
+| odd-page section, `08` | — | — | — | — | 0 selectable sections; rule named in the panel |
+| landscape section, `09` | — | — | — | — | 0 selectable; the `w:pgSz` difference named |
+| table-cell break | — | — | — | — | listed as not removable; server record `container: tbl`, no target |
+
+Across the pass:
+
+- 0 page errors and 0 requests to any other origin.
+- The Sentry chunk was never requested.
+- No horizontal overflow at 390 px.
+- Download was refused (409) before every decision.
+- Every local original's sha256 was unchanged.
+
+The v2 run of the same script (`browser-live.schema-v2/`) also passed as a workflow
+test, but every live answer was an abstention, so no candidate was reached. That run
+exposed the status-first problem in 17.3.
+
+**Pass B: injected diagnosis, same scenarios.** `work/session3/qa_server.py` ran on
+8033 with the production API, pipeline, renderer, preservation checks and download.
+Only model availability and the diagnosis were injected, and a live call raises.
+Result: 9 of 9 passed, with the same zero counts (`browser-injected/summary.json`).
+It covers what live answers did not reach:
+
+- an alignment change accepted to review, then **rejected**
+- the intentional section answered `no_change`
+
+The accepted spacing, page-break and section downloads verified exactly as in pass A.
+
+**Rendered output inspected by eye** (screenshots are in each pass's folder):
+
+- **Spacing:** the 48 pt gap above "Introduction" is gone, and only page 1 changes
+  (25.8% of pixels).
+- **Page break:** on page 2, "Then the balances were confirmed." now continues
+  "Finally the register was ready…"; 6 → 5 pages.
+- **Section:** "Part Two" continues on page 1; 2 → 1 page. The panel says continuous
+  "does not guarantee a page disappears".
+
+### 17.5 What "supported" means after this run
+
+**Supported and working end to end** (deterministically, and now reachable live):
+
+- the six paragraph properties
+- removal of one explicit page or column break in a top-level body paragraph
+- one `nextPage` → `continuous` section start
+
+**Listed and refused, which is correct:**
+
+- breaks in hyperlinks, tables and content controls
+- line breaks and `lastRenderedPageBreak`
+- odd- and even-page sections, and sections whose geometry differs
+
+**Not handled at all** (unchanged, see `CAPABILITIES.md`): tables and table styles,
+lists and numbering, fonts and character formatting, headers, footers, footnotes,
+comments, images, text boxes and tracked changes. This is not Word coverage.
+
+### 17.6 Sentry
+
+**Backend:** `observability.capture_error` sends content-free error events from three
+sites: `job.execute`, `render.failure` and `request.unhandled`.
+
+**Browser:** `frontend/src/telemetry.js` uses `@sentry/browser` 11.6.0, pinned exactly
+and loaded lazily, only when `VITE_SENTRY_DSN` is set. The SDK chunk is 93.5 kB, and
+the main chunk grew by about 5 kB. There is no replay, tracing, sessions, breadcrumbs
+or HTTP context. Details are in `SENTRY_SETUP.md`.
+
+| Check | Result |
+| --- | --- |
+| `test_observability_errors` (8): sentinels in exception messages, file names, complaints, model output, SDK scope and breadcrumbs; hostile event rebuilt at the transport; ambient events dropped; no-DSN path | OK |
+| `telemetry.test.jsx` (7): hostile event rebuilt; no DSN loads nothing; real SDK client and transport; real `window.onerror` handler; error boundary | OK |
+| **Backend over the real HTTP transport** to `sentry_capture_server.py` (a fake renderer that fails, an accept and a reject) | 7 gzip posts: **1 error event + 6 transactions**; no file name, complaint, model output, renderer stderr, checkout path, user name or document text |
+| **Browser over the real fetch transport** (DSN-enabled production build, real Chromium, sentinel query string and file name) | **2 error events** (`window.error`, `window.unhandledrejection`); no message, URL, query or file name |
+| App without any DSN | in both browser passes the chunk was never requested and everything worked |
+
+The browser wire test **failed first**, with 0 events arriving. The SDK names its
+handlers `auto.browser.global_handlers.onerror`, not `onerror`, so the filter dropped
+them all, while the synthetic-event unit tests had passed. It is fixed, and a test now
+drives the real handler.
+
+**Hosted delivery to sentry.io remains unverified:** no real DSN exists here.
+
+### 17.7 Suites
+
+**Backend:** `work/session3/run_suite.sh` ran each module separately with the venv's
+`unittest`, while live inference competed for the CPU. Log:
+`work/session3/backend-suite.log`; full per-module output is in `work/session3/suite/`.
+
+**19 of 19 modules OK, 443 tests, 0 failures, 0 errors:**
+
+| Module | Tests |
+| --- | --- |
+| `test_api` | 57 |
+| `test_api_breaks` | 22 |
+| `test_api_noop` | 2 |
+| `test_api_observability` | 3 |
+| `test_api_render` | 3 |
+| `test_api_sections` | 19 |
+| `test_diagnosis` | 33 |
+| `test_engine` | 23 |
+| `test_eval_fixtures` | 11 |
+| `test_gemma_adapter` | 65 |
+| `test_observability` | 8 |
+| `test_observability_breaks` | 10 |
+| `test_observability_errors` | 8 |
+| `test_observability_review` | 1 |
+| `test_pipeline` | 26 |
+| `test_render` | 10 |
+| `test_sections` | 51 |
+| `test_structure` | 68 |
+| `test_workflow` | 23 |
+
+The v3 key-order change landed after `test_gemma_adapter` had run in that sweep, so the
+modules that exercise the adapter were re-run on the final code:
+`python -m unittest test_gemma_adapter test_diagnosis test_observability
+test_pipeline test_api test_observability_errors test_eval_fixtures` gave **209 tests,
+OK**. With the new order test, `test_gemma_adapter` is 66.
+
+**Frontend:** `npm test` gave **42 tests in 3 files, all passing** (34 before, plus 7
+telemetry tests and 1 table-break test). `npm run build` succeeded.
+
+### 17.8 Not verified
+
+- Hosted Sentry: no real DSN, nothing sent to sentry.io, no dashboard seen.
+- Firefox, WebKit, a screen reader, and Microsoft Word for this session's downloads.
+  Bytes and structure were verified offline; section 14's Word check is older.
+- Any real-world document. Every run used this repository's synthetic fixtures.
+- Model quality beyond the cases above. The ambiguous break still does not get
+  `needs_clarification`, and the intermittent duplicate-evidence refusal is
+  unresolved.

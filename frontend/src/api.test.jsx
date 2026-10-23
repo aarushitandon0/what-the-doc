@@ -256,6 +256,15 @@ describe('explicit breaks',()=>{
   expect(screen.getByText(/not a user-inserted break/)).toBeInTheDocument();
  });
 
+ it('names a break inside a table instead of counting it as one elsewhere',async()=>{
+  const inTable={kind:'explicit_break',break_type:'page',break_type_raw:'page',paragraph_id:null,container:'tbl',style_id:null,run_index:null,break_index_in_run:null,ordinal_in_paragraph:null,edit_eligible:false,ineligible_reason:'The break sits inside <w:tbl>, outside the top-level body paragraphs this version edits, so it is listed and will not be removed.',text_before:'',text_after:'In a table cell.',run_has_properties:false,runs_in_paragraph:null,target_id:null};
+  await openWorkspace({[`GET /api/documents/${DOCUMENT.document_id}/breaks`]:()=>({...BREAKS,break_count:4,breaks:[...BREAKS.breaks,inTable]})});
+  expect(screen.getByText(/1 break inside a table: listed, not removable/)).toBeInTheDocument();
+  expect(screen.queryByText(/more break.* elsewhere/)).not.toBeInTheDocument();
+  // It is not a button anywhere: there is no paragraph to select it from.
+  expect(screen.getAllByRole('button',{name:/NOT REMOVABLE/}).length).toBe(2);
+ });
+
  it('sends no break target when the person has not chosen one',async()=>{
   await openWorkspace();
   // Two removable breaks and none chosen: the interface says so rather than picking
@@ -299,6 +308,9 @@ describe('explicit breaks',()=>{
   // The page count is reported, and the wording does not promise a reduction.
   expect(screen.getByText(/6 pages → 5 pages/)).toBeInTheDocument();
   expect(screen.getByText(/not an approval/)).toBeInTheDocument();
+  // The heading names this kind of change, not the spacing sample's line.
+  expect(screen.getByText('One break removed.')).toBeInTheDocument();
+  expect(screen.queryByText('Better breathing room.')).not.toBeInTheDocument();
   expect(screen.getAllByText(/remove one page break/).length).toBeGreaterThan(0);
   // Reaching review is not approval: acceptance is a separate press.
   expect(screen.queryByRole('link',{name:/Download repaired/})).not.toBeInTheDocument();

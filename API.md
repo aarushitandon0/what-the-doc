@@ -82,6 +82,7 @@ never on the prose:
 | `invalid_state` | 409 | the action does not apply in this state |
 | `candidate_integrity_failed` | 409 | the candidate on disk no longer checks out |
 | `invalid_response` | 400 | an injected diagnosis broke the schema |
+| `internal_error` | 500 | an unexpected server fault. The body never echoes the exception message, which can carry a stored path or document text. Before 23 October 2026 this was Starlette's plain-text `Internal Server Error` with no `error_code` |
 
 Codes that describe a *job's* failure (`model_timeout`, `invalid_response`,
 `unsupported_formatting`, `invalid_operation`, `render_failure`) arrive as the job's
@@ -235,6 +236,12 @@ Four rules a client has to respect here:
   row.** Two breaks in one paragraph must never render identically; an id is not
   something a person can tell apart. The ordinal counts every explicit break of that
   type in the paragraph, editable or not.
+- **A break outside the top-level paragraphs has `paragraph_id: null`.** A break in a
+  body-level table (`w:tbl`) or content control (`w:sdt`) carries `"container":
+  "tbl"` (or `"sdt"`), `target_id: null`, `edit_eligible: false`, null run and
+  ordinal fields, and a reason naming the container. It counts in `break_count`, never
+  in `removable_count`, and cannot be selected or sent. Until 23 October 2026 such
+  breaks were omitted entirely.
 
 ### Sections — inspection, and one convertible start type
 

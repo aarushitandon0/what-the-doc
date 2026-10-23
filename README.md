@@ -42,8 +42,10 @@ The React interface is in `frontend/` and connects to the local API for upload,
 diagnosis, preview, explicit acceptance and download. Real Chromium verification and
 the latest automated results are recorded in `TEST_RESULTS.md` section 12 and
 `frontend/docs/VERIFICATION.md`. Optional Sentry instrumentation covers the custom
-Ollama pipeline, asynchronous jobs and later review/download integrity checks. Actual
-SDK payloads are verified locally; hosted Sentry verification needs project access.
+Ollama pipeline, asynchronous jobs and later review/download integrity checks, plus
+content-free error events from the backend and the browser. Actual SDK payloads are
+verified locally, including over the real HTTP transports to a local capture server;
+hosted Sentry verification needs project access.
 See `OBSERVABILITY.md` for configuration, privacy and limits. No MongoDB connection
 or Tinker training has been performed, and the service has no authentication. No
 real user document has been repaired: samples are synthetic and generated here.
@@ -583,15 +585,22 @@ are reported separately in `TEST_RESULTS.md` section 13.
 The supported **section-start change** shipped in this session, built on that
 inspection and the `GET /sections` contract; its measured results are in
 `TEST_RESULTS.md` section 15. A live run of the structural operations against
-`gemma4:e2b` was performed this session and **failed**: the model returned an
-invented schema and was rejected as `invalid_response`. A controlled comparison
-showed the previous prompt failing the same way, so it is not a regression. The
-deterministic slice is unaffected, and the remedy is recorded as an unfinished
-training experiment in `TINKER_NEXT.md`. Tinker itself is not started, and nothing in
-this version should be read as a promise about it.
+`gemma4:e2b` **failed** at first: the model returned an invented schema and was
+rejected as `invalid_response`. Since 23 October 2026 the adapter sends Ollama a
+per-request JSON Schema instead of `format: "json"`, with the model's `status`
+decoded *after* its explanation and evidence. On five live structural cases it now
+proposes the two correct repairs (a selected page break, a convertible section), each
+rendered and invariant-clean, and abstains correctly on the odd-page section. It still
+says `no_change` where `needs_clarification` is right, and sometimes repeats an
+evidence entry, which the validator refuses. A fully live browser run took the
+spacing, page-break and section repairs from upload to a verified download. These
+are observations on synthetic fixtures, not a benchmark. Measured in
+`TEST_RESULTS.md` section 17; the remaining judgement problems are recorded in
+`TINKER_NEXT.md`. Tinker itself is not started, and nothing in this version should be
+read as a promise about it.
 
-Still outstanding from before: verify sanitized traces in a configured hosted Sentry
-project, and expand browser coverage to other engines and assistive technology. Then
+Still outstanding: verify sanitized traces and error events in a configured hosted
+Sentry project, and expand browser coverage to other engines and assistive technology. Then
 exercise the workflow on a consented real-world document, where numbered lists, tables
 and theme effects will test the resolution caveats beyond the synthetic fixtures. The
 ambiguous complaint still does not reach `needs_clarification` on e2b in the recorded

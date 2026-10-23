@@ -182,6 +182,10 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
     except render_module.RendererUnavailable as error:
         return fail(diagnosis.RENDER_FAILURE, str(error))
     except render_module.RenderFailed as error:
+        # An available renderer failing is an operator problem worth an alert; an
+        # absent one is a configuration the health endpoint already reports.
+        observability.capture_error(error, site='render.failure',
+                                    error_code=diagnosis.RENDER_FAILURE)
         return fail(diagnosis.RENDER_FAILURE, str(error))
     except ValueError as error:
         return fail(diagnosis.INVALID_OPERATION, str(error))

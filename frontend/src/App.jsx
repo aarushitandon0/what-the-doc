@@ -4,6 +4,10 @@ import {Header,Footer,DemoBanner,Steps,Badge,Button,PageHeading,Paper,Empty,Conn
 import {paragraphs,validateFile,readHistory,report} from './data';
 import * as api from './api';
 
+/* The live review heading names the kind of change actually under review; the
+ * spacing line belongs to the bundled spacing sample only. */
+const reviewHeadline={paragraph_property:'One paragraph setting changed.',explicit_break_removal:'One break removed.',section_start_change:'One section start changed.'};
+const pageCount=(n)=>n==null?'? pages':`${n} page${n===1?'':'s'}`;
 export default function App(){
  const [route,setRoute]=useState(()=>window.location.hash.slice(1)||'home');
  const [selected,setSelected]=useState(1),[complaint,setComplaint]=useState('There’s too much space above this heading.');
@@ -228,14 +232,14 @@ export default function App(){
    <aside className="inspector">{liveInspector()}</aside></div></>;
 
  const liveReview=()=>['awaiting_review','accepted','rejected'].includes(job?.state)
-  ?<><div className="review-heading"><div><a className="backlink" href="#workspace"><ArrowLeft/> Back to workspace</a><h1>Same words.<br/><span>Better breathing room.</span></h1>
+  ?<><div className="review-heading"><div><a className="backlink" href="#workspace"><ArrowLeft/> Back to workspace</a><h1>Same words.<br/><span>{reviewHeadline[job.operation_kind]||'One reviewed change.'}</span></h1>
      <p>{job.diagnosis?.explanation}</p><ModeBadge job={job}/></div>
     <div className="segmented" aria-label="Comparison view">{[['side','Side by side'],['original','Original'],['proposed','Proposed']].map(([v,t])=><button key={v} aria-pressed={view===v} onClick={()=>setView(v)}>{t}</button>)}</div></div>
    <ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>
    {!previewReady&&<p className="preview-missing" id="structural-review-warning" role="note"><strong>Visual comparison is unavailable.</strong> Acceptance checks document structure only; no visual verification has occurred. Open the candidate in Word before relying on its appearance.</p>}
    <div className={`comparison ${view!=='side'?'single':''}`}>
-    {view!=='proposed'&&<section><div className="compare-label">BEFORE <small>{job.preview?.before_page_count??'?'} pages</small></div><PreviewPages urls={job.preview?.before_urls||[]} label="Before"/></section>}
-    {view!=='original'&&<section><div className="compare-label green">AFTER <small>{job.preview?.after_page_count??'?'} pages</small></div><PreviewPages urls={job.preview?.after_urls||[]} label="After" comparison={job.visual_comparison?.pages}/></section>}</div>
+    {view!=='proposed'&&<section><div className="compare-label">BEFORE <small>{pageCount(job.preview?.before_page_count)}</small></div><PreviewPages urls={job.preview?.before_urls||[]} label="Before"/></section>}
+    {view!=='original'&&<section><div className="compare-label green">AFTER <small>{pageCount(job.preview?.after_page_count)}</small></div><PreviewPages urls={job.preview?.after_urls||[]} label="After" comparison={job.visual_comparison?.pages}/></section>}</div>
    <p className="fineprint">{job.preview?.note} Changed-pixel ratios are a review signal, not approval: a correct repair legitimately reflows later text.</p>
    <PageCountChange job={job}/>
    <BreakTargetList job={job}/>

@@ -102,14 +102,17 @@ page" in Word.
 | **What is wrong** | Body paragraph 2 holds **two** explicit page breaks with text either side of each. Paragraph 3 holds a deliberate one. Paragraph 4 holds a line break and a `w:lastRenderedPageBreak`, neither removable. A hyperlink and a table cell each hold a page break in an unsupported context. |
 | **Select** | Paragraph 2 in the outline, then **one specific break** in the break list. The text either side is shown so you can tell the two apart. |
 | **Say** | "There is a page break in this paragraph I never asked for and it leaves a half-empty page." |
-| **Expect** | **Without** selecting a break: `needs_clarification` with a question asking which one. **With** one selected: a proposal to remove exactly that `w:br`. |
+| **Expect** | **Without** selecting a break: `needs_clarification` with a question asking which one. **With** one selected: a proposal to remove exactly that `w:br`. **What `gemma4:e2b` actually did on 23 October 2026:** with a break selected, it proposed removing that break, and the repair reached review and a verified download. With none selected, it said `no_change` instead of asking which one — a safe wrong answer, not a crash. See `TEST_RESULTS.md` section 17. |
 | **Check in Word** | One page fewer. The text either side of that break is now joined. Every other break — including the deliberate one in paragraph 3 — is still there. |
 
 First removable page break: `brk-849af3bc0798d816`. Second: `brk-2d774941075c438d`.
 The deliberate one in paragraph 3: `brk-5f5bd30ba08e6948`.
 
 **Also worth trying:** click the break inside the hyperlink. It is listed, and it is
-refused with the element that disqualifies it. The service shows you things it cannot
+refused with the element that disqualifies it. The break in the table cell has no
+paragraph to select, so it is named under every break list instead: "1 break inside
+a table: listed, not removable by this version". (Before 23 October 2026 it was not
+shown at all.) The service shows you things it cannot
 fix rather than hiding them.
 
 ---

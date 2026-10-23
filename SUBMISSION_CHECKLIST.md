@@ -32,8 +32,8 @@ second column is the one that matters: a claim without a line in
 | "Preserves everything" | Preservation is checked for text, runs, run properties, paragraph count, section count and boundaries, unrelated package parts and the original file. It is not a universal guarantee. | "Checks these named invariants against the bytes on disk, and refuses the candidate if any fails." |
 | "Making a section continuous removes the page break" | Page geometry, columns and keep-with-next can still force pagination. | "Asks the section to continue on the same page, and reports the real before and after page counts." |
 | "Zero cost" | Local inference costs electricity and hardware; a hosted version would cost real money. | "Runs locally with no per-request API fee." |
-| "Sentry integrated and verified" | No DSN is configured; nothing has been sent to sentry.io. | "Instrumented, with the privacy boundary verified locally at the transport. Hosted verification is pending a DSN." |
-| "Gemma diagnoses the new section repair" | Measured this session: `gemma4:e2b` did not produce a valid response envelope on the break or section tasks. | "The operation is wired end to end and demonstrated deterministically. Live model conformance on this task is an open problem — see `TINKER_NEXT.md`." |
+| "Sentry integrated and verified" | No real DSN is configured; nothing has been sent to sentry.io or seen in a dashboard. | "Backend and browser error events and backend traces are instrumented, with the privacy boundary verified at the transport and over the real HTTP transports to a local capture server. Hosted verification is pending a DSN." |
+| "Gemma diagnoses the new section repair" | Measured 23 October, single runs on synthetic fixtures: with constrained decoding `gemma4:e2b` proposed the correct section and page-break repairs and abstained correctly on the odd-page section, but missed `needs_clarification` once and had one `invalid_response` (repeated evidence). | "On the recorded synthetic cases, the live model proposed the supported break and section repairs, which reached review and a verified download in a real browser. Not a benchmark — see `TEST_RESULTS.md` section 17." |
 | "Fine-tuned with Tinker" | Nothing was trained. | "Recorded as an unfinished experiment with its design and spending gate written down." |
 | "Deployed" | Nothing is published. | "The static demo is configured and ready to deploy; the local application is what runs." |
 | "Sandboxed renderer" | A unique profile directory and a timeout. Docker would not change that. | "Isolated by a private profile and a timeout. Real isolation is listed as unbuilt work." |
@@ -46,9 +46,10 @@ Claim only what was actually performed:
 - **Gemma / Ollama** — used, locally, and measured. The measurement includes a
   failure, which is reported as a failure.
 - **LibreOffice** — used for every rendered comparison.
-- **Sentry** — code is instrumented and the privacy boundary is tested locally. **No
-  hosted project, no DSN, no trace ever sent.** Do not list it as a verified
-  integration.
+- **Sentry** — backend and browser are instrumented, and the privacy boundary is
+  tested locally, including the real HTTP transports against a local capture server.
+  **No hosted project, no real DSN, nothing ever sent to sentry.io.** Do not list it
+  as a verified integration.
 - **Tinker** — not used. Do not list it.
 - **Render** — configuration committed. **Nothing deployed.** Do not list it as a
   live deployment.

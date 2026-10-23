@@ -1,8 +1,10 @@
-"""Optional, content-free Sentry transactions for the custom local repair pipeline.
+"""Optional, content-free Sentry transactions and error events for the local pipeline.
 
-Only this module talks to the SDK. There are no automatic integrations, error events,
-request capture, logs, breadcrumbs, profiles or attachments. The final transaction
-hook rebuilds the payload from a small schema instead of trying to redact prose.
+Only this module talks to the SDK. There are no automatic integrations, request
+capture, logs, breadcrumbs, profiles or attachments. Error events are built here, by
+`capture_error`, from an exception's class name, a closed-set code and this
+project's own frame locations; the exception message is never read. Both final
+hooks rebuild the payload from a small schema instead of trying to redact prose.
 All SDK failures are isolated from the operation being observed.
 """
 from contextlib import contextmanager
@@ -12,6 +14,7 @@ import os
 from pathlib import Path
 import re
 import threading
+import traceback
 
 TRANSACTIONS = frozenset(('repair.execute', 'review.accept', 'review.reject',
                           'download.execute'))
@@ -33,6 +36,13 @@ OUTCOMES = frozenset(('queued', 'running', 'failed', 'awaiting_review', 'accepte
 _HEX = re.compile(r'^[a-f0-9]{32}$')
 _HASH = re.compile(r'^[a-f0-9]{64}$')
 _MODEL = re.compile(r'^[a-zA-Z0-9][a-zA-Z0-9_.:-]{0,95}$')
+# Where a failure was caught. A closed set, so an event cannot be named by content.
+ERROR_SITES = frozenset(('job.execute', 'render.failure', 'request.unhandled'))
+_ERROR_TAGS = ('wtd.error_code', 'wtd.job_id', 'wtd.mode', 'wtd.operation_kind',
+               'wtd.source_revision')
+_IDENTIFIER = re.compile(r'^[A-Za-z_][A-Za-z0-9_]{0,63}$')
+_MAX_FRAMES = 30
+_SOURCE_DIR = Path(__file__).resolve().parent
 _current = ContextVar('wtd_telemetry_transaction', default=None)
 _client = None
 _attempted = False
@@ -113,6 +123,103 @@ def _sanitize_transaction(event, hint):
         return None
 
 
+def _clean_frames(frames):
+    clean = []
+    for frame in (frames or [])[-_MAX_FRAMES:]:
+        if not isinstance(frame, dict):
+            continue
+        module, function, lineno = frame.get('module'), frame.get('function'), frame.get('lineno')
+        if (isinstance(module, str) and _IDENTIFIER.fullmatch(module)
+                and isinstance(function, str) and _IDENTIFIER.fullmatch(function)
+                and type(lineno) is int and lineno > 0):
+            clean.append({'module': module, 'function': function, 'lineno': lineno,
+                          'in_app': True})
+    return clean
+
+
+def _sanitize_error(event, hint):
+    """Final export boundary for errors: only events capture_error built survive."""
+    try:
+        if hint:
+            hint.pop('attachments', None)
+        tags = event.get('tags') or {}
+        site = tags.get('wtd.site')
+        if event.get('type') not in (None, 'event') or site not in ERROR_SITES:
+            return None
+        clean_tags = {k: v for k, v in _safe_data(tags).items() if k in _ERROR_TAGS}
+        clean_tags['wtd.site'] = site
+        code = clean_tags.setdefault('wtd.error_code', 'internal_error')
+        values = (event.get('exception') or {}).get('values') or [{}]
+        value = values[0] if isinstance(values[0], dict) else {}
+        kind = value.get('type')
+        if not (isinstance(kind, str) and _IDENTIFIER.fullmatch(kind)):
+            kind = 'Error'
+        exception = {'type': kind, 'value': code,
+                     'mechanism': {'type': 'wtd', 'handled': True}}
+        frames = _clean_frames((value.get('stacktrace') or {}).get('frames'))
+        if frames:
+            exception['stacktrace'] = {'frames': frames}
+        result = {}
+        if isinstance(event.get('event_id'), str) and _HEX.fullmatch(event['event_id']):
+            result['event_id'] = event['event_id']
+        if 'timestamp' in event:
+            result['timestamp'] = event['timestamp']
+        result.update(level='error', platform='python', release='what-the-doc',
+                      environment='local', tags=clean_tags,
+                      exception={'values': [exception]},
+                      fingerprint=[site, code, kind])
+        return result
+    except Exception:
+        return None
+
+
+def _own_frames(error):
+    """Module, function and line of frames in this project's own top-level sources.
+
+    Library frames, absolute paths, source lines and locals are left out: a path
+    names the user's machine and a local can hold document text.
+    """
+    frames = []
+    try:
+        for frame in traceback.extract_tb(error.__traceback__):
+            path = Path(frame.filename)
+            if path.suffix == '.py' and path.parent.resolve() == _SOURCE_DIR:
+                frames.append({'module': path.stem, 'function': frame.name,
+                               'lineno': frame.lineno})
+    except Exception:
+        return []
+    return _clean_frames(frames)
+
+
+def capture_error(error, *, site, error_code=None, job_id=None, mode=None,
+                  operation_kind=None):
+    """Report one caught failure as a content-free error event. Never raises.
+
+    Sent: the exception's class name, a closed-set code, where it was caught, the
+    job's opaque id and this project's own frame locations. Not sent: the exception
+    message, which can quote a path, the renderer's output or the model, and any of
+    those can quote the document. Without a DSN this does nothing.
+    """
+    try:
+        if site not in ERROR_SITES or not initialize():
+            return False
+        parent = _current.get()
+        inherited = parent.data if parent is not None else {}
+        tags = {'wtd.site': site}
+        tags.update(_safe_data({
+            'wtd.error_code': error_code if error_code in ERRORS else _error_code(error),
+            'wtd.job_id': job_id or inherited.get('wtd.job_id'),
+            'wtd.mode': mode or inherited.get('wtd.mode'),
+            'wtd.operation_kind': operation_kind or inherited.get('wtd.operation_kind'),
+            'wtd.source_revision': source_revision()}))
+        event = {'level': 'error', 'tags': tags,
+                 'exception': {'values': [{'type': type(error).__name__,
+                                           'stacktrace': {'frames': _own_frames(error)}}]}}
+        return _client.capture_event(event) is not None
+    except Exception:
+        return False
+
+
 def initialize(*, transport=None):
     """Read SENTRY_DSN and WTD_SENTRY_TRACES_SAMPLE_RATE once; absent DSN is offline.
 
@@ -147,6 +254,10 @@ def initialize(*, transport=None):
                                 event = _sanitize_transaction(item.get_transaction_event(), {})
                                 if event is not None:
                                     clean.add_transaction(event)
+                            elif item.type == 'event':
+                                event = _sanitize_error(item.get_event(), {})
+                                if event is not None:
+                                    clean.add_event(event)
                         if clean.items and self.delegate is not None:
                             self.delegate.capture_envelope(clean)
                     except Exception:
@@ -186,7 +297,7 @@ def initialize(*, transport=None):
                 },
                 include_local_variables=False, include_source_context=False,
                 attach_stacktrace=False, max_breadcrumbs=0,
-                before_breadcrumb=lambda *_: None, before_send=lambda *_: None,
+                before_breadcrumb=lambda *_: None, before_send=_sanitize_error,
                 before_send_transaction=_sanitize_transaction,
                 enable_logs=False, auto_session_tracking=False,
                 profiles_sample_rate=0, send_client_reports=False,

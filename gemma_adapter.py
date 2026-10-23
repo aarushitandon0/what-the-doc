@@ -608,6 +608,81 @@ def require_gemma(model):
         'set WTD_ALLOW_NON_GEMMA=1 only to run a deliberate non-Gemma baseline.' % (model,))
 
 
+def _object(properties):
+    return {'type': 'object', 'properties': properties,
+            'required': list(properties), 'additionalProperties': False}
+
+
+def response_schema(source_sha256, selected_id, supplied_ids, break_ids, section_ids):
+    """The diagnosis envelope as a JSON Schema, for Ollama's constrained decoding.
+
+    `format: "json"` only promised *some* JSON, and the recorded structural runs
+    came back as an invented `{"operation": "remove_break"}`. This narrows decoding to
+    the shapes `diagnosis.check` accepts, with the ids and the hash this request
+    actually supplied. It decides nothing: which status to choose, what to cite and
+    whether to propose anything stay the model's, and `diagnosis.check` and
+    `engine.validate` still run on every answer as the only authority.
+    """
+    paragraph_ids = sorted(supplied_ids)
+    evidence = [_object({'paragraph_id': {'type': 'integer', 'enum': paragraph_ids},
+                         'field': {'type': 'string',
+                                   'enum': sorted(diagnosis.CITABLE_FIELDS)}})]
+    operations = []
+    for field in sorted(engine.FIELDS):
+        if field.endswith('_pt'):
+            value = {'type': 'number', 'minimum': 0, 'maximum': 144}
+        elif field == 'alignment':
+            value = {'type': 'string', 'enum': ['left', 'center', 'right', 'both']}
+        else:
+            value = {'type': 'boolean'}
+        operations.append(_object({'paragraph_id': {'type': 'integer', 'enum': [selected_id]},
+                                   'field': {'type': 'string', 'enum': [field]},
+                                   'value': value}))
+    if break_ids:
+        evidence.append(_object({'paragraph_id': {'type': 'integer', 'enum': paragraph_ids},
+                                 'target_id': {'type': 'string', 'enum': sorted(break_ids)}}))
+        operations.append(_object({
+            'operation': {'type': 'string', 'enum': [engine.REMOVE_BREAK]},
+            'target_id': {'type': 'string', 'enum': sorted(break_ids)},
+            'expected_break_type': {'type': 'string',
+                                    'enum': list(diagnosis.REMOVABLE_BREAK_TYPES)}}))
+    if section_ids:
+        evidence.append(_object({'section_id': {'type': 'string', 'enum': sorted(section_ids)}}))
+        expected, new = zip(*diagnosis.SUPPORTED_SECTION_START_CHANGES)
+        operations.append(_object({
+            'operation': {'type': 'string', 'enum': [engine.CHANGE_SECTION_START]},
+            'target_id': {'type': 'string', 'enum': sorted(section_ids)},
+            'expected_start_type': {'type': 'string', 'enum': sorted(set(expected))},
+            'new_start_type': {'type': 'string', 'enum': sorted(set(new))}}))
+    # Key order is decoding order. `status` comes after the explanation, evidence and
+    # operations so the model reasons before it commits: with `status` first, the
+    # canonical 48pt spacing case answered `no_change` with its first token and then
+    # argued for the repair in an explanation it was no longer allowed to act on.
+    # Measured in TEST_RESULTS.md section 17; diagnosis.check ignores key order.
+    def envelope(statuses, operation_count, evidence_min=0, question=None):
+        return _object({
+            'source_sha256': {'type': 'string', 'enum': [source_sha256]},
+            'explanation': {'type': 'string', 'maxLength': diagnosis.MAX_EXPLANATION},
+            'evidence': {'type': 'array', 'minItems': evidence_min,
+                         'maxItems': diagnosis.MAX_EVIDENCE, 'items': {'anyOf': evidence}},
+            'operations': dict({'type': 'array', 'items': {'anyOf': operations}},
+                               **operation_count),
+            'status': {'type': 'string', 'enum': statuses},
+            'question': question or {'type': ['string', 'null'],
+                                     'maxLength': diagnosis.MAX_QUESTION}})
+
+    # One alternative per rule diagnosis.check enforces between status and the rest:
+    # a proposal carries operations and evidence, an abstention carries no
+    # operations, and a request for clarification asks something. A live run
+    # answered `no_change` with an operation attached when these were independent.
+    return {'anyOf': [
+        envelope(['proposed'], {'minItems': 1}, evidence_min=1),
+        envelope(['needs_clarification'], {'maxItems': 0},
+                 question={'type': 'string', 'minLength': 1,
+                           'maxLength': diagnosis.MAX_QUESTION}),
+        envelope(['unsupported', 'no_change'], {'maxItems': 0})]}
+
+
 def _request_bytes(request, timeout):
     try:
         with urllib.request.urlopen(request, timeout=timeout) as response:
@@ -675,7 +750,11 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1,
     supplied_ids.update(record['paragraph_id'] for record in
                         payload_evidence['explicit_breaks']['breaks_in_selected_paragraph'])
     timeout = DEFAULT_TIMEOUT if timeout is None else timeout
-    payload = {'model': model, 'stream': False, 'format': 'json',
+    schema = response_schema(
+        payload_evidence['source_sha256'], paragraph_id, supplied_ids,
+        payload_evidence['explicit_breaks']['supplied_target_ids'],
+        payload_evidence['explicit_breaks']['sections']['supplied_section_target_ids'])
+    payload = {'model': model, 'stream': False, 'format': schema,
                # No hidden chain of thought is requested: a reasoning trace would be
                # unverifiable, slower on CPU, and is not what the validator checks.
                'think': False,

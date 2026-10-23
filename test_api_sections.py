@@ -212,7 +212,13 @@ class RenderedSectionReviewTests(SectionApiBase):
                                             record['source_sha256']),
                              section_target_id=target['target_id'], render=True)
         self.assertEqual(started.status_code, 202, started.text)
-        return record, target, self.settled(started.json()['job_id'], timeout=600)
+        job = self.settled(started.json()['job_id'], timeout=600)
+        # Name the cause when a rendered run does not reach review. A bare 'failed'
+        # was once attributed to a renderer timeout that the log could not show.
+        self.assertEqual(job['state'], api.AWAITING_REVIEW,
+                         'job did not reach review: %s: %s'
+                         % (job.get('error_code'), job.get('error_detail')))
+        return record, target, job
 
     def test_a_rendered_section_change_reaches_review_and_downloads(self):
         record, target, job = self.reviewable()

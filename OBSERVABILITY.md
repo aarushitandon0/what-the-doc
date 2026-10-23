@@ -1,7 +1,11 @@
 # Optional local-pipeline tracing
 
 What-the-Doc uses `sentry-sdk==2.72.0` with manual instrumentation of its existing
-Ollama/Gemma pipeline. No Sentry configuration is required to repair a document.
+Ollama/Gemma pipeline, and — since 23 October 2026 — content-free **error events**
+from the backend (`observability.capture_error`) and the browser
+(`frontend/src/telemetry.js`, `@sentry/browser` 11.6.0, loaded only when
+`VITE_SENTRY_DSN` is set). What each sends and never sends is in
+[SENTRY_SETUP.md](SENTRY_SETUP.md). No Sentry configuration is required to repair a document.
 Missing SDK/configuration, initialization failures, span failures and exporter
 failures leave the repair result unchanged.
 

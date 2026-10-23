@@ -1,4 +1,53 @@
-# Verification — 21 October 2026
+# Verification
+
+## 23 October 2026 — live end-to-end, browser Sentry, four interface defects
+
+Full detail, commands and evidence paths: `../../TEST_RESULTS.md` section 17.
+
+**Commands.** `npm test` → **42 tests, 3 files, passing** (34 before, plus 7 in
+`telemetry.test.jsx` and 1 table-break test). `npm run build` → passes. Main chunk
+307.5 kB (92.7 kB gzip); the Sentry SDK is a separate 93.5 kB chunk that loads only
+when `VITE_SENTRY_DSN` was set at build time.
+
+**Real browser, production bundle, Chromium 153.0.8010.12**
+(`work/session3/browser_e2e.cjs`), downloads taken through the "Download repaired
+.docx" link itself and then checked offline:
+
+- **Fully live** (`gemma4:e2b`, fixture mode off, no DSN): spacing, page-break and
+  section repairs went upload → live diagnosis → rendered previews → accept →
+  download, each byte-identical to the reviewed candidate, with exactly one body
+  element changed and every other package part byte-identical. A live column-break
+  proposal was **rejected**, and the job then refused download (409). The deliberate
+  section was correctly left alone (`no_change`). One live alignment answer was
+  refused by the validator (`invalid_response`), and the page offered no review or
+  download. This **supersedes** the "No live model in any browser run" bullet below.
+- **Injected diagnosis** (fixture-only QA server, live calls impossible): the same
+  scenarios, 9/9.
+- **Refusals:** odd-page and landscape sections offer nothing and name the rule; a
+  break in a table cell is named, not hidden.
+- Both passes: 0 page errors, 0 requests to another origin, Sentry chunk never
+  requested, no horizontal overflow at 390 px.
+
+**Defects found and fixed in the interface:**
+
+1. A break inside a table was silently counted as "elsewhere"; it is now named as
+   listed and not removable (the backend previously omitted it entirely).
+2. A render error blanked the page; a top-level boundary now says "This screen
+   failed to draw" and offers a way back.
+3. The live review heading always used the spacing sample's "Better breathing room."
+   and said "1 pages"; a spacing change with an unchanged page count was told
+   "removing a break does not have to change…". Each now matches the operation (the
+   last fix postdates the browser pass and is covered by jsdom only).
+4. Browser Sentry dropped every uncaught error (wrong handler names), which was found by
+   a wire test against a local capture server, not by the unit tests. Now fixed and tested
+   against the real handler.
+
+**Still not verified:** Firefox, WebKit, a screen reader, Word round-trip of this
+session's downloads, a real-world document, and hosted Sentry delivery.
+
+---
+
+# Earlier verification — 21 October 2026
 
 ## Completed
 

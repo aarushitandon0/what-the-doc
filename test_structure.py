@@ -106,14 +106,35 @@ class InspectionTest(BreakFixtureCase):
         self.assertFalse(inside[0]['edit_eligible'])
         self.assertIn('w:hyperlink', inside[0]['ineligible_reason'])
 
-    def test_break_inside_a_table_cell_is_not_a_body_paragraph_break(self):
+    def test_break_inside_a_table_cell_is_listed_and_never_a_target(self):
         # The cell's paragraph is not a top-level body paragraph, so it has no
-        # paragraph id and never appears as a candidate target at all.
+        # paragraph id and can never be a candidate target. It is still *listed*, as
+        # CAPABILITIES.md promises: an earlier version left it out entirely, so a
+        # person was never told the break existed.
         root = engine.open_package(self.page_doc).document
         self.assertEqual(len(root.xpath('//w:tbl//w:br', namespaces=engine.NS)), 1)
+        report = self.breaks()
+        in_table, = [b for b in report['breaks'] if b['paragraph_id'] is None]
+        self.assertEqual(in_table['container'], 'tbl')
+        self.assertEqual(in_table['break_type'], 'page')
+        self.assertFalse(in_table['edit_eligible'])
+        self.assertIsNone(in_table['target_id'])
+        self.assertIn('<w:tbl>', in_table['ineligible_reason'])
+        self.assertEqual(in_table['text_after'], 'In a table cell.')
         self.assertTrue(all(b['paragraph_id'] < len(engine.paras(root))
-                            for b in self.breaks()['breaks']))
-        self.assertEqual(self.breaks()['break_count'], 5)
+                            for b in report['breaks'] if b['paragraph_id'] is not None))
+        self.assertEqual(report['break_count'], 6)
+        self.assertEqual(report['removable_count'], 3)
+
+    def test_removing_a_break_inside_a_table_is_caught_by_the_preservation_census(self):
+        # Listing the table break also puts it in the invariant census, so a candidate
+        # that lost it would now fail the preservation check instead of passing.
+        import workflow
+        root = engine.open_package(self.page_doc).document
+        before = workflow._break_census(root, 'x')
+        cell_break, = root.xpath('//w:tbl//w:br', namespaces=engine.NS)
+        cell_break.getparent().remove(cell_break)
+        self.assertNotEqual(workflow._break_census(root, 'x'), before)
 
     def test_two_breaks_in_one_paragraph_are_separately_identifiable(self):
         here = [b for b in self.removable()

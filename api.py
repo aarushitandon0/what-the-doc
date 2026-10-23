@@ -358,6 +358,16 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             'fields': [{'location': list(e.get('loc', [])), 'problem': e.get('msg')}
                        for e in exc.errors()][:10]})
 
+    @app.exception_handler(Exception)
+    async def _unhandled_error(request, exc):
+        # The message is not echoed: it can carry a stored path or document text.
+        log.error('request crashed type=%s', type(exc).__name__)
+        observability.capture_error(exc, site='request.unhandled',
+                                    error_code='internal_error')
+        return JSONResponse(status_code=500, content={
+            'error_code': 'internal_error',
+            'detail': 'The service hit an unexpected error.'})
+
     # -- health -------------------------------------------------------------
     @app.get('/api/health')
     def health():
@@ -550,6 +560,9 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             job['updated_at'] = time.time()
             log.error('job crashed id=%s code=internal_error type=%s',
                       job_id, type(error).__name__)
+            observability.capture_error(error, site='job.execute',
+                                        error_code='internal_error',
+                                        job_id=job_id, mode=job['mode'])
             return
         job['report'] = report
         job['preview_index'] = _preview_index(report)

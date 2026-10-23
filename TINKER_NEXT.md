@@ -34,6 +34,21 @@ character instruction and emit a fixed five-key envelope.
 That is the specific, narrow thing a fine-tune would fix: **envelope conformance**,
 not judgement.
 
+> **Update, 23 October 2026 — the premise above no longer holds.** Envelope
+> conformance was fixed without training. `gemma_adapter.response_schema` now sends
+> Ollama a per-request JSON Schema (the supplied ids, the exact source hash, the
+> closed operation shapes and the status/operations rules) in place of
+> `format: "json"`, so decoding cannot produce the invented shape above, and decodes
+> `status` only after the explanation, evidence and operations. On the five live
+> structural cases the final schema produced both correct proposals and the correct
+> odd-page abstention (`TEST_RESULTS.md` section 17.3). What remains is narrower:
+> the ambiguous break gets `no_change` where `needs_clarification` is right, and the
+> model intermittently repeats an evidence entry, which the validator refuses (seen
+> twice). A fine-tune, if one is ever attempted, should target *clarification* and
+> clean citations, with constrained decoding kept on — and a proper multi-case
+> re-measurement should come first, since these are single runs. Nothing below has
+> been started.
+
 ## 1. Train against the now-stable schema
 
 The schema stopped moving this session. Version 3 of the plan schema is the target:

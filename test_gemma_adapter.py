@@ -3,12 +3,15 @@
 No test here contacts a model. Prompt wording and real proposal quality are Milestone C
 and are not established by these tests.
 """
+import io
 import json
 import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+import break_fixtures
 import diagnosis
 import engine
 import eval_fixtures
@@ -519,6 +522,151 @@ class EffectiveNoOpTests(unittest.TestCase):
         package = engine.open_package(self.source)
         engine.validate(self.plan(self.clean_heading, 'space_before_pt', 12.0),
                         package.document, package.styles)
+
+
+def conforms(value, schema):
+    """The JSON Schema subset response_schema uses; enough to tell shapes apart."""
+    if 'anyOf' in schema:
+        return any(conforms(value, option) for option in schema['anyOf'])
+    kinds = schema.get('type')
+    kinds = kinds if isinstance(kinds, list) else [kinds] if kinds else []
+    checks = {'object': lambda v: isinstance(v, dict), 'array': lambda v: isinstance(v, list),
+              'string': lambda v: isinstance(v, str), 'null': lambda v: v is None,
+              'boolean': lambda v: isinstance(v, bool),
+              'integer': lambda v: type(v) is int,
+              'number': lambda v: type(v) in (int, float)}
+    if kinds and not any(checks[k](value) for k in kinds):
+        return False
+    if 'enum' in schema and value not in schema['enum']:
+        return False
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if value < schema.get('minimum', value) or value > schema.get('maximum', value):
+            return False
+    if isinstance(value, str) and not (schema.get('minLength', 0) <= len(value)
+                                       <= schema.get('maxLength', len(value))):
+        return False
+    if isinstance(value, dict):
+        props = schema.get('properties', {})
+        if set(schema.get('required', [])) - set(value):
+            return False
+        if schema.get('additionalProperties') is False and set(value) - set(props):
+            return False
+        return all(conforms(value[k], props[k]) for k in value if k in props)
+    if isinstance(value, list):
+        if not schema.get('minItems', 0) <= len(value) <= schema.get('maxItems', len(value)):
+            return False
+        return all(conforms(item, schema.get('items', {})) for item in value)
+    return True
+
+
+class ResponseSchemaTests(unittest.TestCase):
+    """The decoding constraint sent to Ollama. No model is contacted."""
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.source = Path(self.tmp.name) / 'breaks.docx'
+        break_fixtures.build_manual_page_break(self.source)
+        self.hash = engine.signature(self.source)
+        self.selected = break_fixtures.MANUAL_PAGE_BREAK_IDS['two_breaks_paragraph']
+        payload = gemma_adapter.evidence(self.source, self.selected)
+        self.break_ids = payload['explicit_breaks']['supplied_target_ids']
+        self.assertTrue(self.break_ids)
+        self.schema = gemma_adapter.response_schema(
+            self.hash, self.selected, {self.selected, self.selected + 1}, self.break_ids, [])
+
+    def answer(self, **overrides):
+        base = {'status': 'proposed', 'explanation': 'An unwanted manual page break.',
+                'evidence': [{'paragraph_id': self.selected, 'target_id': self.break_ids[0]}],
+                'source_sha256': self.hash,
+                'operations': [{'operation': engine.REMOVE_BREAK, 'target_id': self.break_ids[0],
+                                'expected_break_type': 'page'}],
+                'question': None}
+        base.update(overrides)
+        return base
+
+    def test_answers_the_validator_accepts_conform(self):
+        for answer in (self.answer(),
+                       self.answer(status='no_change', operations=[], evidence=[]),
+                       self.answer(status='needs_clarification', operations=[],
+                                   question='Which break?'),
+                       self.answer(operations=[{'paragraph_id': self.selected,
+                                                'field': 'space_before_pt', 'value': 12}],
+                                   evidence=[{'paragraph_id': self.selected,
+                                              'field': 'space_before_pt'}])):
+            self.assertTrue(conforms(answer, self.schema), answer)
+
+    def test_status_and_operations_must_agree_as_the_validator_requires(self):
+        # The second live failure after the schema landed: no_change with an operation.
+        for answer in (self.answer(status='no_change'),
+                       self.answer(status='unsupported'),
+                       self.answer(status='proposed', operations=[]),
+                       self.answer(evidence=[]),
+                       self.answer(status='needs_clarification', operations=[], question=None),
+                       self.answer(status='needs_clarification', operations=[], question='')):
+            self.assertFalse(conforms(answer, self.schema), answer)
+
+    def test_the_model_reasons_before_it_commits_to_a_status(self):
+        # Decoding follows property order; status-first made the model abstain on its
+        # first token before reading its own evidence (TEST_RESULTS.md section 17).
+        for branch in self.schema['anyOf']:
+            order = list(branch['properties'])
+            self.assertEqual(order, branch['required'])
+            self.assertGreater(order.index('status'), order.index('explanation'))
+            self.assertGreater(order.index('status'), order.index('evidence'))
+            self.assertGreater(order.index('status'), order.index('operations'))
+
+    def test_the_recorded_invented_answer_cannot_be_decoded(self):
+        # Verbatim from the failed live run in TEST_RESULTS.md section 15.7.
+        self.assertFalse(conforms({'operation': 'remove_break',
+                                   'break_id': 'brk-7925c71d4abd3fc5'}, self.schema))
+
+    def test_ids_hash_and_values_are_limited_to_what_was_supplied(self):
+        for answer in (
+                self.answer(source_sha256='0' * 64),
+                self.answer(operations=[{'operation': engine.REMOVE_BREAK,
+                                         'target_id': 'brk-0000000000000000',
+                                         'expected_break_type': 'page'}]),
+                self.answer(operations=[{'paragraph_id': self.selected + 1,
+                                         'field': 'space_before_pt', 'value': 12}]),
+                self.answer(operations=[{'paragraph_id': self.selected,
+                                         'field': 'space_before_pt', 'value': 5000}]),
+                self.answer(operations=[{'paragraph_id': self.selected,
+                                         'field': 'alignment', 'value': 'justify'}]),
+                self.answer(evidence=[{'paragraph_id': 99, 'field': 'alignment'}]),
+                self.answer(confidence=0.9)):
+            self.assertFalse(conforms(answer, self.schema), answer)
+
+    def test_no_break_or_section_shape_is_offered_when_none_was_supplied(self):
+        schema = gemma_adapter.response_schema(self.hash, 1, {0, 1, 2}, [], [])
+        self.assertFalse(conforms(self.answer(evidence=[]), schema))
+        shapes = schema['anyOf'][0]['properties']['operations']['items']['anyOf']
+        self.assertTrue(all('operation' not in shape['properties'] for shape in shapes))
+
+    def test_the_request_carries_this_documents_schema_not_bare_json(self):
+        sent = {}
+
+        def fake_urlopen(request, timeout=None):
+            sent.update(json.loads(request.data))
+            reply = {'model': 'gemma4:e2b', 'message': {'content': json.dumps(
+                self.answer(status='no_change', operations=[], evidence=[]))}}
+            return io.BytesIO(json.dumps(reply).encode())
+
+        os.environ['GEMMA_MODEL'] = 'gemma4:e2b'
+        self.addCleanup(os.environ.pop, 'GEMMA_MODEL', None)
+        with patch.object(gemma_adapter.urllib.request, 'urlopen', fake_urlopen):
+            found, _ = gemma_adapter.diagnose(self.source, 'This break is unwanted.',
+                                              self.selected)
+        self.assertEqual(found['status'], 'no_change')
+        schema = sent['format']
+        self.assertIsInstance(schema, dict)
+        proposal = schema['anyOf'][0]['properties']
+        self.assertEqual(proposal['status']['enum'], ['proposed'])
+        self.assertEqual(proposal['source_sha256']['enum'], [self.hash])
+        operation_ids = [shape['properties']['target_id']['enum']
+                         for shape in proposal['operations']['items']['anyOf']
+                         if 'target_id' in shape['properties']]
+        self.assertEqual(operation_ids, [sorted(self.break_ids)])
 
 
 if __name__ == '__main__':
