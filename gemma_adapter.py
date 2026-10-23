@@ -284,15 +284,26 @@ def _written_twips(value):
     return round(float(value) * styles_module.TWIPS_PER_POINT)
 
 
+# The editable on/off properties. ECMA-376 says that when no layer of the style
+# hierarchy sets one, the property "shall not be applied" (pageBreakBefore 17.3.1.23,
+# keepNext 17.3.1.15): unset already means off.
+TOGGLE_FIELDS = tuple(sorted(field for field, spec in styles_module.RESOLVED_FIELDS.items()
+                             if spec[2] == 'toggle' and field in engine.FIELDS))
+
+
 def _is_effective_noop(field, current, proposed):
     """True when writing `proposed` would record the value the paragraph already resolves to.
 
-    Deliberately conservative, because three things that look alike are not alike:
+    Deliberately conservative, because things that look alike are not alike:
 
-      * `current is None` means *no layer set it* (origin application_default). That is
-        not zero and not any particular number, so writing a value there is a real
-        change and is never called a no-op - including writing 0, and including writing
-        False to a toggle nothing has set.
+      * `current is None` means *no layer set it* (origin application_default). For a
+        length that is not zero and not any particular number, so writing one there is
+        a real change and is never called a no-op - including writing 0.
+      * For a toggle, unset is off by the standard, so writing False there changes
+        nothing on the page and only pins a direct override - the inherited -> direct
+        case below. It is refused like that case. Writing True is a real change. (Until
+        section 18 of TEST_RESULTS.md this was allowed; measured live, the model
+        proposed exactly this write and it reached review.)
       * A length is compared at the resolution it is *written* at (whole twips), since
         12.0pt and 12.004pt both encode to 240 twips and the second is not a repair.
       * A toggle is compared by identity against True/False, so a bool never compares
@@ -306,7 +317,7 @@ def _is_effective_noop(field, current, proposed):
     than waved through as harmless.
     """
     if current is None:
-        return False
+        return field in TOGGLE_FIELDS and proposed is False
     if field.endswith('_pt'):
         if isinstance(current, bool) or not isinstance(current, (int, float)):
             return False
@@ -342,7 +353,10 @@ def ineffective_operations(path, plan):
                              'proposed_value': op.get('value'),
                              'current_value': record.get('value'),
                              'current_origin': record.get('origin'),
-                             'reason': ('writes a direct value equal to the value this '
+                             'reason': ('writes False to a toggle no layer sets, which '
+                                        'is already off'
+                                        if record.get('value') is None else
+                                        'writes a direct value equal to the value this '
                                         'paragraph already resolves to')})
     return findings
 
@@ -377,9 +391,11 @@ def _validate_proposal(path, plan, allow_effective_noop=False):
             '%s: every proposed operation writes a value this paragraph already '
             'resolves to, so nothing would change on the page. %s'
             % (INEFFECTIVE_MARKER,
-               '; '.join('paragraph %d %s -> %r is already %r from %s'
+               '; '.join('paragraph %d %s -> %r is already %s'
                          % (f['paragraph_id'], f['field'], f['proposed_value'],
-                            f['current_value'], f['current_origin'])
+                            'off (no layer sets it)' if f['current_value'] is None
+                            else '%r from %s' % (f['current_value'],
+                                                 f['current_origin']))
                          for f in findings)))
     return True
 

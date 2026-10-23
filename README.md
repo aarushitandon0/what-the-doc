@@ -465,7 +465,10 @@ and call it a repair. The proposal validator rejects an entirely ineffective pla
 `invalid_operation`; the model's raw `proposed` diagnosis remains in the report rather
 than being relabelled as a correct abstention. Mixed plans retain actual changes and
 remove redundant writes before candidate creation. Lengths are compared at whole-twip
-resolution; unset values remain distinct from zero and `False`. The low-level engine
+resolution; an unset length remains distinct from zero. An unset on/off property
+(`page_break_before`, `keep_with_next`) is off by the OOXML standard, so writing
+`False` to it is refused as ineffective, while writing `True` is a real change
+(`TEST_RESULTS.md` section 18.11). The low-level engine
 still permits a deliberate hand-written plan that pins inheritance.
 
 It never accepts a repair. The best outcome is `awaiting_review`: a candidate exists,

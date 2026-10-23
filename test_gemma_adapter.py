@@ -371,8 +371,9 @@ class EffectiveNoOpTests(unittest.TestCase):
     direct formatting, and a later edit to Heading1 would then move every other heading
     and leave this one behind.
 
-    These tests also pin the distinctions the guard must not collapse: unset is not
-    zero, unset is not False, and a length is compared at the twip it is written at.
+    These tests also pin the distinctions the guard must not collapse: an unset length
+    is not zero, an unset toggle is off (so False is a no-op there and True is not),
+    and a length is compared at the twip it is written at.
     """
 
     def setUp(self):
@@ -454,18 +455,55 @@ class EffectiveNoOpTests(unittest.TestCase):
         self.assertTrue(gemma_adapter.validate_proposal(self.source, plan))
         self.assertEqual(gemma_adapter.ineffective_operations(self.source, plan), [])
 
-    def test_an_unset_toggle_is_not_false_so_writing_false_is_a_real_change(self):
-        unset = next(r['paragraph_id'] for r in self.report['paragraphs']
-                     if r['effective_properties']['page_break_before']['value'] is None)
-        self.assertTrue(gemma_adapter.validate_proposal(
-            self.source, self.plan(unset, 'page_break_before', False)))
+    # Changed deliberately (TEST_RESULTS.md section 18). This test used to pin the
+    # opposite: that writing False to an unset toggle is a real change. ECMA-376 says a
+    # toggle no layer of the style hierarchy sets "shall not be applied" (pageBreakBefore
+    # 17.3.1.23, keepNext 17.3.1.15), so unset already means off. Writing False there
+    # changes nothing on the page and only pins a direct override, which is exactly the
+    # inherited -> direct case this guard already refuses. Measured live, the model
+    # proposed this write and it reached review.
+    def test_writing_false_to_an_unset_toggle_is_refused_as_ineffective(self):
+        for field in gemma_adapter.TOGGLE_FIELDS:
+            unset = next(r['paragraph_id'] for r in self.report['paragraphs']
+                         if r['effective_properties'][field]['origin']
+                         == 'application_default')
+            self.assertIsNone(self.resolved(unset, field)['value'])
+            with self.assertRaises(ValueError) as caught:
+                gemma_adapter.validate_proposal(self.source, self.plan(unset, field, False))
+            self.assertIn(gemma_adapter.INEFFECTIVE_MARKER, str(caught.exception))
+            self.assertIn('off (no layer sets it)', str(caught.exception))
+
+    def test_writing_true_to_an_unset_toggle_is_still_a_real_change(self):
+        for field in gemma_adapter.TOGGLE_FIELDS:
+            unset = next(r['paragraph_id'] for r in self.report['paragraphs']
+                         if r['effective_properties'][field]['origin']
+                         == 'application_default')
+            plan = self.plan(unset, field, True)
+            self.assertTrue(gemma_adapter.validate_proposal(self.source, plan))
+            self.assertEqual(gemma_adapter.ineffective_operations(self.source, plan), [])
+
+    def test_a_plan_mixing_a_real_change_with_false_on_an_unset_toggle_keeps_only_the_change(self):
+        # Measured live (TEST_RESULTS.md 18.3, intermediate run): an answer padded a real
+        # repair with keep_with_next False on a paragraph where nothing sets it.
+        centred = fixtures.FAULT_IDS['inconsistent_alignment']
+        self.assertEqual(self.resolved(centred, 'keep_with_next')['origin'],
+                         'application_default')
+        plan = {'source_sha256': self.hash, 'operations': [
+            {'paragraph_id': centred, 'field': 'alignment', 'value': 'both'},
+            {'paragraph_id': centred, 'field': 'keep_with_next', 'value': False}]}
+        prepared = gemma_adapter.prepare_proposal(self.source, plan)
+        self.assertEqual(prepared['operations'], [plan['operations'][0]])
 
     def test_the_comparison_keeps_zero_unset_and_booleans_apart(self):
         # Zero is a value, not an absence: once something resolves to 0pt, writing 0pt
-        # changes nothing. An unset property compares equal to nothing at all.
+        # changes nothing. An unset length compares equal to nothing at all; an unset
+        # toggle is off, so it equals False and nothing else.
         self.assertTrue(gemma_adapter._is_effective_noop('space_before_pt', 0.0, 0))
         self.assertFalse(gemma_adapter._is_effective_noop('space_before_pt', None, 0))
-        self.assertFalse(gemma_adapter._is_effective_noop('page_break_before', None, False))
+        self.assertTrue(gemma_adapter._is_effective_noop('page_break_before', None, False))
+        self.assertTrue(gemma_adapter._is_effective_noop('keep_with_next', None, False))
+        self.assertFalse(gemma_adapter._is_effective_noop('page_break_before', None, True))
+        self.assertFalse(gemma_adapter._is_effective_noop('page_break_before', None, 0))
         self.assertFalse(gemma_adapter._is_effective_noop('page_break_before', False, True))
         self.assertTrue(gemma_adapter._is_effective_noop('page_break_before', False, False))
         self.assertFalse(gemma_adapter._is_effective_noop('alignment', None, 'left'))

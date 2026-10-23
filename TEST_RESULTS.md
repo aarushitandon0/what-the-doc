@@ -1940,8 +1940,9 @@ happens only when a break is selected; a regression test covers it.
 
 1. **Writing a value to a property nothing sets.** Wrong paragraph: spacing 0 on an
    unset paragraph (baseline 3/3, final2 3/3). Odd-page section: `page_break_before`
-   true (final2 3/3) or false (final 3/3) on unset paragraph 0. `_is_effective_noop`
-   deliberately treats unset as different from any value.
+   true (final2 3/3) or false (final 3/3) on unset paragraph 0. When these runs were
+   made, `_is_effective_noop` treated unset as different from any value; 18.11 changes
+   that for `False` on a toggle only.
 2. **Document-text injection.** A proposal may change any cited editable field on the
    selected paragraph, up to 12 operations. The citation rule stopped 2 of 3 in final2;
    it would not stop an answer that cites what it changes.
@@ -1980,3 +1981,37 @@ No live-model browser pass was run on this code.
 - One machine, CPU only; one model build. `eval-final` ran alongside the test suite.
 - Three repeats per case is a small sample, and temperature 0 is not deterministic here.
 - Hosted Sentry delivery remains **unverified**: no real DSN exists.
+
+### 18.11 Follow-up: `False` on an unset toggle is now ineffective
+
+**Change.** `gemma_adapter._is_effective_noop` now treats writing `False` to
+`page_break_before` or `keep_with_next` as ineffective when no layer of the style
+hierarchy sets it. ECMA-376 says such a toggle "shall not be applied"
+(`pageBreakBefore` 17.3.1.23, `keepNext` 17.3.1.15): unset already means off. The write
+changes nothing on the page and only pins a direct override, which is the inherited →
+direct case the guard already refused. Writing `True` there is still a real change, and
+an unset *length* is still distinct from 0.
+
+Backend suite with this change: **495 tests, OK** (`work/backend-suite-toggle.log`).
+
+This reverses an earlier, documented decision. The test that pinned it
+(`test_an_unset_toggle_is_not_false_so_writing_false_is_a_real_change`) was replaced
+deliberately with tests for `False` refused, `True` allowed, and a mixed plan trimmed to
+its real change.
+
+**Replay, not a new live run.** `work/replay_reached_review.py` re-validates every
+recorded proposal that reached review in the four runs above against its own source
+document, with no model call:
+
+- **Now refused:** 4. Odd-page section `page_break_before: false` ×3 (final) and the
+  ambiguous-break `page_break_before: false` (intermediate).
+- **Every correct repair still reaches review** unchanged: spacing, alignment, stranded
+  break, selected break, supported section.
+- **Still reach review:** wrong-paragraph spacing 0 (×6), legitimate-break spacing 0
+  (×1), odd-page `page_break_before: true` (×3, final2), and the injection answers in
+  final (2–3 operations trimmed each, the rest kept).
+
+So this would not have changed the final2 figures in 18.3: there the odd-page answers
+wrote `true`. The remaining unset-length path (spacing 0) is the most frequent unsafe
+answer that reaches review; treating it the same way would need its own justification,
+because spacing has autospacing and compatibility rules that toggles do not.
