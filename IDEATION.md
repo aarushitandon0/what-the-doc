@@ -157,9 +157,10 @@ strictly validated JSON diagnosis, abstention as a first-class answer, and a ten
 live evaluation covering clean paragraphs, a legitimate page break, an ambiguous
 complaint, an inherited alternative measurement, document text that tries to instruct
 the model, and a complaint aimed at the wrong or a nonexistent paragraph.
-Exit: met on this set. Live `gemma4:e2b` on CPU passed 8 of 10 cases, reached all three
-labelled repairs unaided, touched no forbidden field and broke no preservation
-invariant; median latency 84s. Two gaps remain recorded rather than smoothed over: a
+Exit: met on this set at the time, with one run per case (8 of 10, median 84s; kept in
+`TEST_RESULTS.md` section 5 as history). The current measurement repeats every case
+three times and is in section 18: 7 of 30 runs on the ten cases, with no preservation
+invariant broken. Two gaps remain recorded rather than smoothed over: a
 malformed `evidence` shape when abstaining on an ambiguous complaint, and failure to
 notice `overridden_by`, where the deterministic validator stops the ineffective repair
 instead. Still outstanding: benchmarking `gemma4:e4b`, and a consented real document.

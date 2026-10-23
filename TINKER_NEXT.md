@@ -110,7 +110,9 @@ documents, same validators, before and after. Specifically:
 
 Do **not** compare a fine-tuned model against `gemma4:e4b`, or against results from
 an earlier prompt scope. The historical 8/10 figure in `TEST_RESULTS.md` belongs to
-its original prompt and capability scope and is not a baseline for this.
+its original prompt and capability scope and is not a baseline for this. The current
+pre-training measurement is section 18 (three runs per case, the two sets scored
+separately); compare against that, under the same prompt hash and schema revision.
 
 ## 5. An explicit spending cap, agreed before training starts
 

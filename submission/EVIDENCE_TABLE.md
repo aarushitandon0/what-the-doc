@@ -82,7 +82,9 @@ structural operations is not working**, and the submission must not claim otherw
 The remedy is recorded in `TINKER_NEXT.md` as an unfinished experiment.
 
 The historical **8/10** model figure belongs to its original prompt and capability
-scope (paragraph properties) and is not transferable to the break or section tasks.
+scope (paragraph properties), one run per case, and is retired as a current result.
+The current measurement, three runs per case, is `TEST_RESULTS.md` section 18:
+ten-case set 7/30, structural set 9/15, scored separately.
 
 ## 5. Microsoft Word — an independent check that agreed
 

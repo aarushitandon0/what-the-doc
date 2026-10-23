@@ -438,14 +438,22 @@ paragraph id and a complaint into the same pipeline a user would drive.
 python live_eval.py work/live-eval            # add --render for before/after images
 ```
 
-With `gemma4:e2b` on CPU, **8 of 10 cases passed**. The prompt has since been revised
-twice and re-measured on the same ten cases; all three revisions score 8/10, with a
-different two failing. The current code sends revision 4: schema valid 10/10, status
-correct 8/10, operation and target correct 9/10, forbidden-field *proposals* 1/10,
-preservation failures 0/10, median latency 119s. (Revision 2's figures, for comparison:
-schema 9/10, status 9/10, operation 9/10, forbidden 0/10, median 84s.) Latency is
-dominated by the machine, not the prompt. Full per-case output and the revision-by-
-revision table are in `TEST_RESULTS.md` sections 5 and 10.
+**Current measurement (`TEST_RESULTS.md` section 18, 23 October 2026).** Each case is
+now run three times, because `gemma4:e2b` at temperature 0 does not give the same answer
+every time. On the current code the ten-case set passed **7 of 30 runs** and a separate
+five-case structural set (breaks and sections) **9 of 15**; the two sets are never
+pooled. Before this work, the same harness measured 14/30 and 10/15. Most ten-case
+failures are proposals refused because the model repeated a citation, so nothing was
+written. Three wrong proposals per set still reached the human review step, and no run
+broke a preservation invariant. These are observations on synthetic fixtures on one
+CPU machine, not accuracy rates.
+
+```bash
+python live_eval.py work/live-eval --structural --repeat 3
+```
+
+The earlier "8 of 10" was a single run per case under earlier prompts (sections 5 and
+10). It is history, not a current result.
 
 If no Gemma runtime is reachable, the cases that need one are recorded `not_run` and are
 never graded. A mocked answer is never counted as a pass.
@@ -567,20 +575,19 @@ serialized again, so XML byte identity is not promised.
 
 ## Next milestone
 
-The recorded revision-4 baseline remains `gemma4:e2b`: schema 10/10, status 8/10,
-operation/target 9/10, one forbidden-field proposal, and zero preservation failures.
-These are observations on ten synthetic cases, not general accuracy rates. The
-earlier e4b comparison used revision 2 and scored 6/10; it is not a revision-4
-comparison. Full results and prompt history remain in `TEST_RESULTS.md` sections 5–10.
+The current live measurement is `TEST_RESULTS.md` section 18: three runs per case on
+`gemma4:e2b`, ten-case set 7/30 and structural set 9/15. These are observations on
+synthetic cases, not general accuracy rates. The older single-run figures (8/10 for
+`gemma4:e2b`, 6/10 for `gemma4:e4b` under revision 2) are kept in sections 5–10 as
+history only.
 
 The deterministic no-op guard is separate from raw model quality. It prevents an
 ineffective proposal from becoming a reviewable repair without changing the model's
 recorded answer or relabelling the historical evaluation as improved.
 
-That 8/10 figure is the **earlier capability and prompt evaluation**, measured on the
-ten paragraph-property cases before explicit-break support existed. It is not a
-measurement of break handling and was not re-run for it; the live break observations
-are reported separately in `TEST_RESULTS.md` section 13.
+The old 8/10 figure was measured on the ten paragraph-property cases before
+explicit-break support existed, one run each. It is retired; section 18 measures the
+break and section cases as their own set.
 
 The supported **section-start change** shipped in this session, built on that
 inspection and the `GET /sections` contract; its measured results are in
@@ -590,12 +597,15 @@ rejected as `invalid_response`. Since 23 October 2026 the adapter sends Ollama a
 per-request JSON Schema instead of `format: "json"`, with the model's `status`
 decoded *after* its explanation and evidence. On five live structural cases it now
 proposes the two correct repairs (a selected page break, a convertible section), each
-rendered and invariant-clean, and abstains correctly on the odd-page section. It still
-says `no_change` where `needs_clarification` is right, and sometimes repeats an
-evidence entry, which the validator refuses. A fully live browser run took the
+rendered and invariant-clean, and abstains correctly on the odd-page section. It never asks:
+it says `no_change` where `needs_clarification` is right. When it repeats an evidence
+entry, an abstention is accepted with the repeat dropped and counted
+(`evidence_duplicates_removed`), but a proposal is still refused, because measured
+live, accepting those let wrong repairs through. When two breaks share a paragraph and
+the person has not chosen one, no removal is accepted at all. A fully live browser run took the
 spacing, page-break and section repairs from upload to a verified download. These
 are observations on synthetic fixtures, not a benchmark. Measured in
-`TEST_RESULTS.md` section 17; the remaining judgement problems are recorded in
+`TEST_RESULTS.md` sections 17 and 18; the remaining judgement problems are recorded in
 `TINKER_NEXT.md`. Tinker itself is not started, and nothing in this version should be
 read as a promise about it.
 

@@ -2,7 +2,7 @@
 
 Continue directly in this project folder. Read AGENTS.md, README.md, TEST_RESULTS.md, IDEATION.md and relevant code first.
 
-Current reported state: 136 deterministic tests passed with no model calls; Gemma e2b live evaluation passed 8/10 cases with median 84 seconds; one fully rendered live repair reached awaiting_review, accepted:false, with all eight preservation invariants passing. diagnosis.py defines the strict schema; pipeline.py runs diagnosis through validated proposal and previews. Known gaps: malformed evidence for ambiguous complaints and failure to respect overridden_by, blocked by engine validation. gemma4:e4b is installed but untested. This folder was not a Git repository. A separate React frontend is available; do not build a competing UI.
+Current reported state: 136 deterministic tests passed with no model calls; Gemma e2b live evaluation passed 8/10 cases with median 84 seconds (historical, one run per case; the current repeated measurement is TEST_RESULTS.md section 18); one fully rendered live repair reached awaiting_review, accepted:false, with all eight preservation invariants passing. diagnosis.py defines the strict schema; pipeline.py runs diagnosis through validated proposal and previews. Known gaps: malformed evidence for ambiguous complaints and failure to respect overridden_by, blocked by engine validation. gemma4:e4b is installed but untested. This folder was not a Git repository. A separate React frontend is available; do not build a competing UI.
 
 Goal: assess the larger model and prepare the backend for React integration.
 

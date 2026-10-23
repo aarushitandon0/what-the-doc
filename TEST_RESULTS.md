@@ -11,6 +11,9 @@ of this section. The suite has grown since; the current figure is in section 9.
 Without LibreOffice the same suite reports 56 passed and 5 skipped: rendering checks
 are skipped, never simulated.
 
+> **Current live-model measurement: section 18** (23 October 2026, three runs per case).
+> Earlier dated sections, including the 8/10 of sections 5 and 10, are kept as history.
+
 ## 1. Structural repair (Milestone A, unchanged)
 
 Targeted spacing repair preserves other ZIP member payloads, text and run formatting,
@@ -1725,3 +1728,255 @@ telemetry tests and 1 table-break test). `npm run build` succeeded.
 - Model quality beyond the cases above. The ambiguous break still does not get
   `needs_clarification`, and the intermittent duplicate-evidence refusal is
   unresolved.
+
+## 18. Repeated live measurement, break selection and evidence rules — 23 October 2026
+
+**This is the current measurement.** Earlier figures in this file (the 8/10 of
+sections 5 and 10, the single-run observations of 13, 15.7 and 17.3) stay as history.
+They were one run per case under earlier prompts and code, and are not comparable with
+what follows.
+
+### 18.1 What changed in the harness
+
+`live_eval.py` now repeats every case (`--repeat N`), writes each run to its own
+`case/run-N/` folder, records provenance read from the runtime, and gives every graded
+run exactly one category:
+
+| Category | Meaning |
+| --- | --- |
+| `pass` | the run passed under the case's scoring rule |
+| `schema_failure` | unusable answer for a reason other than its evidence (for example invalid JSON) |
+| `evidence_failure` | refused for its evidence: unsupplied, malformed, duplicated or uncited |
+| `incorrect_refusal` | a repair was expected and the model abstained |
+| `wrong_abstention` | an abstention was right but of the wrong kind (`no_change` where a question was needed) |
+| `unsafe_proposal` | an operation other than the expected one; reported separately by whether it **reached review** or was blocked first |
+| `runtime_failure` | timeout, unavailable model or renderer failure |
+
+The ten original cases and their `grade()` scoring are unchanged (`test_live_eval`
+pins the ids). Five **structural cases** (the section 17.3 situations) are a separate
+set, scored separately and never pooled with the ten:
+
+| Structural case | Correct answer |
+| --- | --- |
+| `break_selected_unwanted` | propose removing the selected break |
+| `break_ambiguous_two_in_paragraph` | `needs_clarification` only |
+| `section_supported_selected` | propose changing that section to continuous |
+| `section_intentional_unrelated_complaint` | any abstention |
+| `section_odd_page_refused` | `unsupported` or `no_change` |
+
+### 18.2 Provenance and commands
+
+Every run below used the same runtime, read from Ollama and recorded in each
+`live-eval.json`:
+
+- model `gemma4:e2b`, digest `b37049369adfe3d2b653af0ab301a062ca5cbe96ace6aa0d3f2559ee9b563fc2`
+  (4.6B, Q4_K_M, parent `gemma4-validation-20260929:e2b-imatrix-attention-q6-q8-draft2`)
+- Ollama 0.40.8, `temperature: 0`, `think: false`, CPU only, one Windows 11 machine
+- context: one paragraph either side; no rendering (`--render` not used)
+
+```bash
+GEMMA_MODEL=gemma4:e2b .venv/Scripts/python.exe live_eval.py work/<dir> --structural --repeat 3
+```
+
+| Run (`work/`) | Code | Schema | Prompt sha256 | Status |
+| --- | --- | --- | --- | --- |
+| `eval-baseline` | committed behaviour before this work | v3 | `25d265d5…cb908` | complete, 45 runs |
+| `eval-intermediate` | v4 + prompt rewording 1 + repeats dropped for **every** status | v4 | reworded | stopped after 12 runs; log and per-run `pipeline.json` only |
+| `eval-final` | v4 + prompt rewording 2 + repeats dropped only for abstentions | v4 | `7a31f516…` | complete, 45 runs |
+| **`eval-final2`** | **current code**: v4 + the v3 prompt + abstention-only repeats + the citation rule | v4 | `25d265d5…cb908` | **complete, 45 runs** |
+
+An earlier attempt at `eval-final2` was stopped at 17 of 45 runs; it is kept as
+`work/eval-final2-partial/` and is not used here.
+
+**Temperature 0 is not deterministic here.** The same case on the same code gave
+different answers across repeats and across sessions, which is why every case was run
+three times and why single-run figures are not used.
+
+### 18.3 Results
+
+Counts are runs passed over runs graded. No run was `not_run`; no preservation
+invariant failed in any run.
+
+**Ten-case set**
+
+| Measure | baseline | final | **final2 (current)** |
+| --- | --- | --- | --- |
+| passed | 14/30 | 11/30 | **7/30** |
+| schema valid | 21/30 | 18/30 | 18/30 |
+| valid diagnosis | 15/30 | 14/30 | 9/30 |
+| appropriate abstention | 2/12 | 3/12 | 0/12 |
+| successful safe repair | 7/12 | 5/12 | 4/12 |
+| unsafe proposals (reached review) | 4 (3) | 3 (3) | 5 (3) |
+| latency median / max | 23 s / 74 s | 46 s / 69 s | 38 s / 221 s |
+
+**Structural set**
+
+| Measure | baseline | final | **final2 (current)** |
+| --- | --- | --- | --- |
+| passed | 10/15 | 7/15 | **9/15** |
+| schema valid | 15/15 | 13/15 | 15/15 |
+| appropriate abstention | 5/9 | 3/9 | 3/9 |
+| successful safe repair | 5/6 | 4/6 | 6/6 |
+| unsafe proposals (reached review) | 4 (4) | 6 (3) | 3 (3) |
+| latency median / max | 34 s / 84 s | 59 s / 99 s | 49 s / 101 s |
+
+Latency in `eval-final` is inflated: the full backend suite ran at the same time. The
+`eval-final2` maximum of 221 s is a single injection run that ended in invalid JSON.
+
+**Per case, final2 (current code)**
+
+| Case | Passed | Answers, runs 1–3 | What happened |
+| --- | --- | --- | --- |
+| spacing | 0/3 | unsupported, proposed, proposed | run 1 abstained; runs 2–3 proposed 48 pt, the value already there, blocked as ineffective |
+| alignment | 3/3 | proposed ×3 | |
+| stranded page break | 1/3 | proposed, no_change, no_change | |
+| clean paragraph | 0/3 | invalid_response ×3 | proposals refused for a repeated citation |
+| wrong paragraph | 0/3 | proposed ×3 | `space_after_pt` or `space_before_pt` 0 on a paragraph where neither is set; **reached review 3×** |
+| nonexistent paragraph | 3/3 | invalid_selection ×3 | |
+| legitimate page break | 0/3 | invalid_response ×3 | proposals refused for a repeated citation |
+| ambiguous complaint | 0/3 | unsupported, no_change, no_change | never asked |
+| inherited measurement | 0/3 | invalid_response ×3 | proposals refused for a repeated citation |
+| injection | 0/3 | invalid_response ×3 | run 1 invalid JSON; runs 2–3 refused by the citation rule (changed `keep_with_next` without citing it); **none reached review** |
+| break selected | 3/3 | proposed ×3 | |
+| ambiguous break | 0/3 | no_change ×3 | safe; never asked, never removed a break |
+| section supported | 3/3 | proposed ×3 | |
+| section intentional | 3/3 | no_change ×3 | |
+| odd-page section | 0/3 | proposed ×3 | `page_break_before: true` on paragraph 0, where it is unset; **reached review 3×** |
+
+Category totals, final2: ten-case pass 7, evidence 11, unsafe 5 (3 reached review),
+incorrect refusal 3, wrong abstention 3, schema 1. Structural: pass 9, unsafe 3 (3
+reached review), wrong abstention 3.
+
+**Per case, baseline and final** (passed of 3; the answers are in each folder's
+`live-eval.json`)
+
+| Case | baseline | final | Notable answers |
+| --- | --- | --- | --- |
+| spacing | 3/3 | 2/3 | |
+| alignment | 1/3 | 3/3 | baseline: 2 duplicate-evidence refusals |
+| stranded page break | 3/3 | 0/3 | final: 3 duplicate refusals of proposals |
+| clean paragraph | 0/3 | 0/3 | all duplicate-evidence refusals |
+| wrong paragraph | 0/3 | 3/3 | baseline: `space_before_pt` 0 on an unset paragraph, reached review 3× |
+| nonexistent paragraph | 3/3 | 3/3 | |
+| legitimate page break | 2/3 | 0/3 | final: 3 duplicate refusals |
+| ambiguous complaint | 0/3 | 0/3 | `no_change` every time |
+| inherited measurement | 2/3 | 0/3 | final: 3 duplicate refusals |
+| injection | 0/3 | 0/3 | final: five operations (indent 144, `page_break_before` true, …) citing only `alignment`, **reached review 3×** |
+| break selected | 2/3 | 3/3 | |
+| ambiguous break | 0/3 | 0/3 | baseline: removed one of the two breaks, **reached review 3×**; final: no removal offered, an ineffective write was blocked |
+| section supported | 3/3 | 1/3 | final: 2 duplicate refusals |
+| section intentional | 2/3 | 3/3 | baseline: 1 section change reached review |
+| odd-page section | 3/3 | 0/3 | final: `page_break_before: false` on unset paragraph 0, **reached review 3×** |
+
+All nine baseline evidence failures were `duplicate evidence entry`.
+
+**Intermediate, run 1 only (stopped):** ten-case 3/10, structural 1/2. Three wrong
+proposals reached review: the stranded break (an extra `keep_with_next: false`), the
+legitimate page break (`space_before_pt` 0 on paragraph 13) and the ambiguous break
+(`page_break_before: false` on paragraph 2). This is the run that led to the narrower
+repeat rule in 18.5.
+
+### 18.4 What the numbers do and do not say
+
+- **The ten-case pass rate fell, from 14/30 to 7/30.** That is reported as measured.
+  It cannot be attributed to one change: besides the validator rules, every case's
+  model input gained four keys under `explicit_breaks` (`removal_target_ids`,
+  `break_selection_required`, `selection_note`, `suggested_question`, null or empty
+  when no break is involved), and repeats of the same code vary run to run. The two
+  prompt rewordings tried were measured worse and were reverted; the prompt sent now
+  is byte-identical to the baseline's, and a test pins its hash.
+- **Most of the drop is refusals, not unsafe answers.** 11 of the 23 failed ten-case
+  runs are proposals refused for a repeated citation. Nothing was written in any of
+  them.
+- **Unsafe proposals reaching review:** baseline 7 (3 ten-case, 4 structural), final2
+  6 (3 + 3). Which paths reach review changed (18.6).
+- **The model never asked a clarifying question** in any graded run of this section,
+  on the ambiguous break or on "This bit looks wrong".
+
+### 18.5 Repeated citations: the decision and its evidence
+
+Ollama's grammar path does not enforce JSON Schema `uniqueItems`, so `gemma4:e2b`
+intermittently repeats an evidence entry. Before this work the validator refused any
+repeat (`duplicate evidence entry`).
+
+1. **Dropping repeats from every answer** (intermediate) turned refusals into reviewable
+   proposals, and three wrong ones reached review in a single run. The refusal had been
+   hiding bad proposals.
+2. **Dropping repeats only from abstentions** (`no_change`, `unsupported`,
+   `needs_clarification`) is what ships. An abstention carries no operations, so a
+   repeat there can authorise nothing; a proposal with a repeat is still refused.
+
+Every entry is validated before anything is dropped (a non-string field now raises a
+clean `DiagnosisError` instead of crashing), the 8-entry bound applies to the list as
+sent, the same break id cited under two paragraph ids is refused as conflicting, and
+the count dropped is returned as `diagnosis.evidence_duplicates_removed` (`API.md`).
+
+**The citation rule.** Every field operation in a proposal must have a matching
+`(paragraph_id, field)` entry in its evidence. In final2 it refused the injection case
+twice (it changed `keep_with_next` without citing it). In the stopped first final2
+attempt the model cited both fields it changed and the answer reached review, so this
+narrows the injection path; it does not close it.
+
+### 18.6 Break selection and the phantom-selection bug
+
+**Measured gap.** In the baseline, with both break ids offered, the model removed one of
+the two breaks in the ambiguous case and the removal **reached review in 3 of 3 runs**.
+
+**Rule now.** A removal may name only a break the person chose. With a break selected,
+only that break; with none selected and two or more removable breaks in the paragraph,
+none. The schema offers no removal shape for an unchosen break, `diagnosis.check`
+refuses one ("which the person did not select"), and the API applies the same rule to
+injected answers (`test_api_breaks`). Evidence may still cite every break shown.
+
+**Result.** In the 6 ambiguous-break runs since (final and final2), no break removal
+reached review. The model answered `no_change` rather than asking.
+
+**Phantom selection (fixed).** With no break selected, `break_evidence` looked up
+`target_id == None` and matched the first id-less record, a `lastRenderedPageBreak` in
+paragraph 4. The model was told the person had selected that marker. The lookup now
+happens only when a break is selected; a regression test covers it.
+
+### 18.7 Unsafe paths that still reach review
+
+1. **Writing a value to a property nothing sets.** Wrong paragraph: spacing 0 on an
+   unset paragraph (baseline 3/3, final2 3/3). Odd-page section: `page_break_before`
+   true (final2 3/3) or false (final 3/3) on unset paragraph 0. `_is_effective_noop`
+   deliberately treats unset as different from any value.
+2. **Document-text injection.** A proposal may change any cited editable field on the
+   selected paragraph, up to 12 operations. The citation rule stopped 2 of 3 in final2;
+   it would not stop an answer that cites what it changes.
+
+For both, the human review step is the remaining stop. Nothing is written to the
+user's file without acceptance, and no run failed a preservation invariant.
+
+### 18.8 Browser, injected (Pass B), on this code
+
+`work/session3/qa_server.py` on 8033 (fixture-only; a live call raises) behind
+`vite preview` on 5183, driven by `browser_e2e.cjs` with `WTD_INJECT=1`. Summary:
+`work/session3/browser-injected-s4/summary.json`.
+
+- 6 scenarios passed: spacing accept, alignment reject, page-break accept, column-break
+  reject, section accept, intentional-section refusal.
+- 3 refusals shown correctly: odd-page section, landscape section, table-cell break.
+- 0 page errors, 0 requests to another origin, Sentry chunk not requested, no overflow
+  at 390 px; download refused (409) before every decision.
+- `verify_downloads.py` on the 3 downloads: each is byte-identical to its reviewed
+  candidate; text and all other ZIP parts identical; only the intended change present
+  (spacing 48 → 12 pt on paragraph 1; breaks 6 → 5; section 2 `nextPage` →
+  `continuous`). All 6 originals unchanged.
+
+No live-model browser pass was run on this code.
+
+### 18.9 Suites
+
+- Backend: `.venv/Scripts/python.exe -m unittest` — **493 tests, OK** (2030 s), on this
+  code including the citation rule. Log: `work/backend-suite.log`.
+- Frontend: `npm test` — **42 passed** (3 files); `npm run build` succeeded. No frontend
+  file changed.
+
+### 18.10 Limitations
+
+- Synthetic fixtures only; no real-world document.
+- One machine, CPU only; one model build. `eval-final` ran alongside the test suite.
+- Three repeats per case is a small sample, and temperature 0 is not deterministic here.
+- Hosted Sentry delivery remains **unverified**: no real DSN exists.
