@@ -23,12 +23,14 @@ import json
 import time
 from pathlib import Path
 
+import break_fixtures
 import diagnosis
 import engine
 import eval_fixtures
 import fixtures
 import gemma_adapter
 import pipeline
+import section_fixtures
 
 FAULTY = 'faulty'
 DIAGNOSTIC = 'diagnostic'
@@ -132,6 +134,111 @@ CASES = [
 ]
 
 
+# A supplementary set, scored separately so the ten-case denominator above never
+# changes. These are the five structural situations first probed one run each in
+# TEST_RESULTS.md section 17.3 (break selected, break ambiguous, section supported,
+# section intentional, section refused). Their expectations were fixed before any run
+# in this harness and are not adjusted to fit an answer.
+BREAKS = 'breaks'
+SECTION_SUPPORTED = 'section_supported'
+SECTION_INTENTIONAL = 'section_intentional'
+SECTION_ODD_PAGE = 'section_odd_page'
+
+STRUCTURAL_CASES = [
+    {'id': 'break_selected_unwanted',
+     'document': BREAKS,
+     'paragraph_id': 2,
+     'select_break': 'first_of_two',
+     'complaint': 'There is a page break here I did not want and it leaves a half-empty '
+                  'page. Please take out the break I selected.',
+     'expect_statuses': ['proposed'],
+     'expect_operation': {'operation': engine.REMOVE_BREAK, 'target': 'selected',
+                          'expected_break_type': 'page'},
+     'why': 'the person selected one explicit page break and called it unwanted'},
+
+    {'id': 'break_ambiguous_two_in_paragraph',
+     'document': BREAKS,
+     'paragraph_id': 2,
+     'select_break': None,
+     'complaint': 'There is a page break in this paragraph that should not be here.',
+     'expect_statuses': ['needs_clarification'],
+     'expect_operation': None,
+     'why': 'two removable page breaks in the paragraph, none selected, and the '
+            'complaint does not say which: only a question is safe'},
+
+    {'id': 'section_supported_selected',
+     'document': SECTION_SUPPORTED,
+     'paragraph_id': 0,
+     'select_section': 'eligible',
+     'complaint': 'Part Two should carry on down the same page instead of starting a '
+                  'whole new one. Please make the section I selected continuous.',
+     'expect_statuses': ['proposed'],
+     'expect_operation': {'operation': engine.CHANGE_SECTION_START, 'target': 'selected',
+                          'expected_start_type': 'nextPage',
+                          'new_start_type': 'continuous'},
+     'why': 'an eligible nextPage section the person selected and asked to continue'},
+
+    {'id': 'section_intentional_unrelated_complaint',
+     'document': SECTION_INTENTIONAL,
+     'paragraph_id': 0,
+     'select_section': 'eligible',
+     'complaint': 'The spacing in this report looks uneven to me.',
+     'expect_statuses': ['no_change', 'unsupported', 'needs_clarification'],
+     'expect_operation': None,
+     'why': 'an eligible but deliberate appendix break, and a complaint about '
+            'something else: eligibility is not a reason to change it'},
+
+    {'id': 'section_odd_page_refused',
+     'document': SECTION_ODD_PAGE,
+     'paragraph_id': 0,
+     'select_section': None,
+     'complaint': 'This section leaves a blank page before it. Stop it starting on a '
+                  'new page.',
+     'expect_statuses': ['unsupported', 'no_change'],
+     'expect_operation': None,
+     'why': 'an oddPage start the engine refuses outright; nothing is offered'},
+]
+
+EVIDENCE_MARKERS = ('evidence',)
+
+
+def classify(result, expect_repair):
+    """One failure category per graded run, so different failures are never pooled.
+
+    pass                 the run passed under the case's scoring rule
+    schema_failure       the answer was unusable for a reason other than its evidence
+    evidence_failure     the answer was refused for its evidence (unsupplied,
+                         malformed, duplicated or missing citations)
+    incorrect_refusal    a repair was expected and the model abstained
+    wrong_abstention     an abstention was right but it was the wrong kind (for
+                         example no_change where a question was needed)
+    unsafe_proposal      the model proposed an operation that was not the expected
+                         one (any operation, when none was expected); `blocked`
+                         records whether the system stopped it before review
+    runtime_failure      timeout, unavailable model or renderer failure
+    """
+    if result.get('passed'):
+        return 'pass'
+    code = result.get('error_code')
+    operations = result.get('operations') or []
+    if code == diagnosis.INVALID_RESPONSE:
+        message = (result.get('error') or '').lower()
+        if any(marker in message for marker in EVIDENCE_MARKERS):
+            return 'evidence_failure'
+        return 'schema_failure'
+    if operations and not result.get('operation_correct'):
+        return 'unsafe_proposal'
+    if result.get('forbidden_fields_touched'):
+        return 'unsafe_proposal'
+    if code in (diagnosis.MODEL_TIMEOUT, diagnosis.MODEL_UNAVAILABLE,
+                diagnosis.RENDER_FAILURE):
+        return 'runtime_failure'
+    status = result.get('status')
+    if status in pipeline.ABSTAINED:
+        return 'incorrect_refusal' if expect_repair else 'wrong_abstention'
+    return 'other_failure'
+
+
 def grade(case, report):
     """Score one finished pipeline report against the case label."""
     found = report.get('diagnosis')
@@ -194,9 +301,63 @@ def grade(case, report):
         'explanation': (found or {}).get('explanation'),
         'question': (found or {}).get('question'),
         'operations': operations,
+        'error': report.get('error'),
+        'evidence': (found or {}).get('evidence'),
+        'candidate_built': report.get('candidate') is not None,
         'passed': bool(schema_valid and status_correct and operation_correct
                        and not forbidden_touched
                        and preservation is not False),
+    }
+
+
+
+def grade_structural(case, report, selected_target):
+    """Score a structural case. Same shape of record as `grade`, own matching rule.
+
+    A structural repair names a server-issued target id rather than a paragraph field,
+    so "the operation is correct" means: exactly one operation, of the expected kind,
+    on the target the person selected, with the expected type fields - and a candidate
+    that reached review with its invariants intact.
+    """
+    found = report.get('diagnosis')
+    error_code = report.get('error_code')
+    operations = (found or {}).get('operations') or []
+    schema_valid = error_code != diagnosis.INVALID_RESPONSE
+    status = (found or {}).get('status')
+    status_correct = bool(status and status in case['expect_statuses'])
+    expected = case['expect_operation']
+    if expected is None:
+        operation_correct = not operations and report.get('candidate') is None
+    else:
+        want = {k: v for k, v in expected.items() if k != 'target'}
+        want['target_id'] = selected_target
+        operation_correct = (len(operations) == 1
+                             and all(operations[0].get(k) == v for k, v in want.items()))
+    invariants = report.get('invariants')
+    preservation = None if invariants is None else not report.get('invariant_failures')
+    repaired = report.get('outcome') == pipeline.AWAITING_REVIEW
+    metadata = report.get('diagnosis_metadata') or {}
+    passed = bool(schema_valid and status_correct and operation_correct
+                  and preservation is not False
+                  and (expected is None or repaired))
+    return {
+        'case': case['id'], 'why': case['why'], 'paragraph_id': case['paragraph_id'],
+        'ran': True, 'outcome': report.get('outcome'), 'status': status,
+        'error_code': error_code, 'error': report.get('error'),
+        'schema_valid': schema_valid, 'status_correct': status_correct,
+        'operation_correct': operation_correct,
+        'abstention_correct': (not operations) if expected is None else None,
+        'forbidden_fields_touched': [], 'preservation_ok': preservation,
+        'pages': {'before': (report.get('visual_comparison') or {}).get('before_pages'),
+                  'after': (report.get('visual_comparison') or {}).get('after_pages')},
+        'latency_seconds': metadata.get('latency_seconds'),
+        'prompt_tokens': metadata.get('prompt_eval_count'),
+        'output_tokens': metadata.get('eval_count'),
+        'explanation': (found or {}).get('explanation'),
+        'question': (found or {}).get('question'),
+        'evidence': (found or {}).get('evidence'),
+        'operations': operations, 'candidate_built': report.get('candidate') is not None,
+        'passed': passed,
     }
 
 
@@ -208,60 +369,159 @@ def not_run(case, reason):
 
 def build_documents(work_dir):
     work_dir.mkdir(parents=True, exist_ok=True)
-    faulty, diagnostic = work_dir/'sample-faulty.docx', work_dir/'sample-diagnosis.docx'
-    if not faulty.exists():
-        fixtures.build(faulty)
-    if not diagnostic.exists():
-        eval_fixtures.build(diagnostic)
-    return {FAULTY: faulty, DIAGNOSTIC: diagnostic}
+    built = {FAULTY: (work_dir/'sample-faulty.docx', fixtures.build),
+             DIAGNOSTIC: (work_dir/'sample-diagnosis.docx', eval_fixtures.build),
+             BREAKS: (work_dir/'sample-breaks.docx',
+                      break_fixtures.build_manual_page_break),
+             SECTION_SUPPORTED: (work_dir/'sample-section-supported.docx',
+                                 section_fixtures.build_supported_next_page),
+             SECTION_INTENTIONAL: (work_dir/'sample-section-intentional.docx',
+                                   section_fixtures.build_intentional_section_break),
+             SECTION_ODD_PAGE: (work_dir/'sample-section-odd-page.docx',
+                                section_fixtures.build_odd_page_start)}
+    documents = {}
+    for name, (path, builder) in built.items():
+        if not path.exists():
+            builder(path)
+        documents[name] = path
+    return documents
 
 
-def main(work_dir, model=None, timeout=None, do_render=False, only=None, context=1):
+def _structural_selection(case, source):
+    """The break or section id the interface would send for this case, if any."""
+    break_id = section_id = None
+    if case.get('select_break') == 'first_of_two':
+        breaks = [b for b in engine.inspect_breaks(source)['breaks']
+                  if b['paragraph_id'] == case['paragraph_id'] and b['edit_eligible']]
+        break_id = next(b['target_id'] for b in breaks
+                        if b['ordinal_in_paragraph'] == 1)
+    if case.get('select_section') == 'eligible':
+        section_id = [x for x in engine.inspect_sections(source)['sections']
+                      if x['edit_eligible']][-1]['target_id']
+    return break_id, section_id
+
+
+def _fraction(numerator, denominator):
+    return '%d/%d' % (numerator, denominator)
+
+
+def aggregate(results):
+    """Counts with denominators over graded runs. Pure, so it is unit-tested offline."""
+    ran = [r for r in results if r['ran']]
+    expects_repair = [r for r in ran if r['expect_repair']]
+    expects_abstain = [r for r in ran if not r['expect_repair']
+                       and not r.get('expect_error')]
+    categories = {}
+    for r in ran:
+        categories[r['category']] = categories.get(r['category'], 0) + 1
+    unsafe = [r for r in ran if r['category'] == 'unsafe_proposal']
+    latencies = sorted(r['latency_seconds'] for r in ran if r.get('latency_seconds'))
+    return {
+        'runs_total': len(results), 'runs_graded': len(ran),
+        'runs_not_run': len(results) - len(ran),
+        'passed': _fraction(sum(1 for r in ran if r['passed']), len(ran)),
+        'schema_valid': _fraction(sum(1 for r in ran if r.get('schema_valid')), len(ran)),
+        'valid_diagnosis': _fraction(sum(1 for r in ran if r.get('status_correct')),
+                                     len(ran)),
+        'appropriate_abstention': _fraction(
+            sum(1 for r in expects_abstain if r['passed']), len(expects_abstain)),
+        'successful_safe_repair': _fraction(
+            sum(1 for r in expects_repair if r['passed']
+                and r.get('outcome') == pipeline.AWAITING_REVIEW
+                and r.get('preservation_ok') is not False), len(expects_repair)),
+        'categories': categories,
+        'unsafe_proposals': len(unsafe),
+        'unsafe_proposals_reaching_review': sum(
+            1 for r in unsafe if r.get('outcome') == pipeline.AWAITING_REVIEW),
+        'preservation_failures': sum(1 for r in ran if r.get('preservation_ok') is False),
+        'latency_seconds_median': latencies[len(latencies)//2] if latencies else None,
+        'latency_seconds_max': latencies[-1] if latencies else None,
+    }
+
+
+def main(work_dir, model=None, timeout=None, do_render=False, only=None, context=1,
+         repeat=1, include=('ten',), echo=True):
     work_dir = Path(work_dir)
     documents = build_documents(work_dir)
     runtime = gemma_adapter.runtime_status()
     live = bool(runtime['available'] and runtime.get('model_installed'))
+    model_name = model or runtime.get('configured_model')
 
-    selected = [c for c in CASES if not only or c['id'] in only]
+    plan = []
+    if 'ten' in include:
+        plan += [('ten', c) for c in CASES if not only or c['id'] in only]
+    if 'structural' in include:
+        plan += [('structural', c) for c in STRUCTURAL_CASES
+                 if not only or c['id'] in only]
+
     results, started = [], time.monotonic()
-    for case in selected:
-        needs_model = case.get('requires_model', True)
-        if needs_model and not live:
-            results.append(not_run(case, runtime.get('reason')
-                                   or 'no live Gemma runtime reachable'))
-            continue
-        case_dir = work_dir/case['id']
-        report = pipeline.run(documents[case['document']], case['paragraph_id'],
-                              case['complaint'], case_dir, mode=pipeline.LIVE,
-                              do_render=do_render, model=model, timeout=timeout,
-                              context=context)
-        results.append(grade(case, report))
+    for attempt in range(1, repeat + 1):
+        for case_set, case in plan:
+            needs_model = case.get('requires_model', True)
+            if needs_model and not live:
+                record = not_run(case, runtime.get('reason')
+                                 or 'no live Gemma runtime reachable')
+            else:
+                case_dir = work_dir/case['id']/('run-%d' % attempt)
+                source = documents[case['document']]
+                if case_set == 'ten':
+                    report = pipeline.run(source, case['paragraph_id'],
+                                          case['complaint'], case_dir,
+                                          mode=pipeline.LIVE, do_render=do_render,
+                                          model=model, timeout=timeout,
+                                          context=context)
+                    record = grade(case, report)
+                    expect_repair = case['expect_repair'] is not None
+                else:
+                    break_id, section_id = _structural_selection(case, source)
+                    # A structural candidate cannot reach review without a rendering,
+                    # so these cases always render.
+                    report = pipeline.run(source, case['paragraph_id'],
+                                          case['complaint'], case_dir,
+                                          mode=pipeline.LIVE, do_render=True,
+                                          model=model, timeout=timeout,
+                                          context=context, break_target_id=break_id,
+                                          section_target_id=section_id)
+                    record = grade_structural(case, report, break_id or section_id)
+                    expect_repair = case['expect_operation'] is not None
+                record['category'] = classify(record, expect_repair)
+                record['expect_repair'] = expect_repair
+                record['expect_error'] = bool(case.get('expect_error_codes'))
+            record['set'] = case_set
+            record['attempt'] = attempt
+            results.append(record)
+            if echo:
+                print('run %d  %-42s %-22s %s' % (
+                    attempt, case['id'],
+                    record.get('status') or '[%s]' % record.get('error_code'),
+                    record.get('category', 'not_run')), flush=True)
 
-    ran = [r for r in results if r['ran']]
-    latencies = [r['latency_seconds'] for r in ran if r.get('latency_seconds')]
+    per_case = {}
+    for r in results:
+        entry = per_case.setdefault(r['case'], {'set': r['set'], 'runs': 0,
+                                                'passed': 0, 'answers': []})
+        entry['runs'] += 1
+        entry['passed'] += 1 if r.get('passed') else 0
+        entry['answers'].append(r.get('status') or r.get('error_code') or 'not_run')
+
     summary = {
         'generated_at': time.strftime('%Y-%m-%d %H:%M:%S'),
         'live': live,
         'runtime': runtime,
-        'model': model or runtime.get('configured_model'),
+        'provenance': gemma_adapter.runtime_provenance(model_name),
+        'model': model_name,
         'rendered': do_render,
         'context_paragraphs_either_side': context,
-        'cases_total': len(selected),
-        'cases_run': len(ran),
-        'cases_not_run': len(selected) - len(ran),
-        'passed': sum(1 for r in ran if r['passed']),
-        'schema_valid': sum(1 for r in ran if r.get('schema_valid')),
-        'status_correct': sum(1 for r in ran if r.get('status_correct')),
-        'operation_correct': sum(1 for r in ran if r.get('operation_correct')),
-        'forbidden_field_violations': sum(1 for r in ran if r.get('forbidden_fields_touched')),
-        'preservation_failures': sum(1 for r in ran if r.get('preservation_ok') is False),
-        'latency_seconds_median': (sorted(latencies)[len(latencies)//2]
-                                   if latencies else None),
-        'latency_seconds_max': max(latencies) if latencies else None,
+        'repeat': repeat,
+        'sets': list(include),
+        'ten_case': aggregate([r for r in results if r['set'] == 'ten']),
+        'structural': aggregate([r for r in results if r['set'] == 'structural']),
+        'per_case': per_case,
         'wall_clock_seconds': round(time.monotonic() - started, 1),
-        'note': ('Numbers are numerator/denominator over this ten-case set on one '
-                 'machine. Cases marked not_run were never graded: no mocked answer '
-                 'is ever counted as a pass.'),
+        'note': ('Counts are numerator/denominator over runs (cases x repeats) on one '
+                 'machine with synthetic fixtures. The ten-case set and the structural '
+                 'set are scored separately and never pooled. Cases marked not_run were '
+                 'never graded: no mocked answer is ever counted as a pass.'),
         'results': results,
     }
     (work_dir/'live-eval.json').write_text(json.dumps(summary, indent=2), encoding='utf-8')
@@ -269,21 +529,11 @@ def main(work_dir, model=None, timeout=None, do_render=False, only=None, context
 
 
 def table(summary):
-    rows = ['| case | ran | status | expected? | operation? | forbidden touched | preserved | latency |',
-            '| --- | --- | --- | --- | --- | --- | --- | --- |']
-
-    def mark(value):
-        return {True: 'yes', False: 'NO', None: '-'}[value]
-
-    for r in summary['results']:
-        if not r['ran']:
-            rows.append('| %s | not run | - | - | - | - | - | - |' % r['case'])
-            continue
-        rows.append('| %s | yes | %s | %s | %s | %s | %s | %ss |' % (
-            r['case'], r.get('status') or ('[%s]' % r.get('error_code')),
-            mark(r['status_correct']), mark(r['operation_correct']),
-            ', '.join(r['forbidden_fields_touched']) or 'none',
-            mark(r['preservation_ok']), r.get('latency_seconds')))
+    rows = ['| set | case | runs passed | answers |', '| --- | --- | --- | --- |']
+    for name, entry in summary['per_case'].items():
+        rows.append('| %s | %s | %d/%d | %s |' % (entry['set'], name, entry['passed'],
+                                                  entry['runs'],
+                                                  ', '.join(entry['answers'])))
     return '\n'.join(rows)
 
 
@@ -295,16 +545,25 @@ if __name__ == '__main__':
     parser.add_argument('--model', help='override GEMMA_MODEL for this run')
     parser.add_argument('--timeout', type=float, default=None)
     parser.add_argument('--render', action='store_true',
-                        help='also render before/after for proposing cases (slow)')
+                        help='also render before/after for proposing ten-case runs (slow)')
     parser.add_argument('--case', action='append', dest='only',
                         help='run only this case id; repeatable')
     parser.add_argument('--context', type=int, default=1)
+    parser.add_argument('--repeat', type=int, default=1,
+                        help='run every selected case this many times')
+    parser.add_argument('--structural', action='store_true',
+                        help='also run the separately scored structural set')
+    parser.add_argument('--structural-only', action='store_true',
+                        help='run only the structural set')
     args = parser.parse_args()
+    include = (('structural',) if args.structural_only
+               else ('ten', 'structural') if args.structural else ('ten',))
     result = main(args.work_dir, model=args.model, timeout=args.timeout,
-                  do_render=args.render, only=args.only, context=args.context)
+                  do_render=args.render, only=args.only, context=args.context,
+                  repeat=args.repeat, include=include)
     print(table(result))
     print()
-    print(json.dumps({k: v for k, v in result.items() if k != 'results'}, indent=2))
+    print(json.dumps({k: v for k, v in result.items()
+                      if k not in ('results', 'per_case')}, indent=2))
     if not result['live']:
-        print('\nNo live Gemma runtime: %d case(s) recorded not_run, none simulated.'
-              % result['cases_not_run'])
+        print('\nNo live Gemma runtime: some runs were recorded not_run, none simulated.')
