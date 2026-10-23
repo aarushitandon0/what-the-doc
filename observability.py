@@ -15,10 +15,14 @@ import threading
 
 TRANSACTIONS = frozenset(('repair.execute', 'review.accept', 'review.reject',
                           'download.execute'))
-STAGES = frozenset(('diagnosis.execute', 'model.inference', 'diagnosis.validate',
-                    'proposal.validate', 'proposal.prepare', 'candidate.create',
-                    'render.original', 'render.candidate', 'preservation.check',
-                    'review.integrity', 'download.integrity'))
+STAGES = frozenset(('structure.inspect', 'diagnosis.execute', 'model.inference',
+                    'diagnosis.validate', 'proposal.validate', 'proposal.prepare',
+                    'candidate.create', 'render.original', 'render.candidate',
+                    'preservation.check', 'review.integrity', 'download.integrity'))
+# What kind of change a plan makes. A label on work already validated elsewhere; it
+# grants nothing and is a closed set, so no free-form string can ride out on it.
+OPERATION_KINDS = frozenset(('paragraph_property', 'explicit_break_removal',
+                             'section_start_change', 'mixed', 'none'))
 ERRORS = frozenset(('model_unavailable', 'model_timeout', 'invalid_response',
                     'invalid_selection', 'unsupported_formatting', 'invalid_operation',
                     'render_failure', 'candidate_integrity_failed', 'invalid_state',
@@ -43,6 +47,10 @@ def _safe_data(data):
             valid = isinstance(value, str) and _HEX.fullmatch(value)
         elif key in ('wtd.prompt_sha256', 'wtd.source_revision'):
             valid = isinstance(value, str) and _HASH.fullmatch(value)
+        elif key == 'wtd.operation_kind':
+            valid = isinstance(value, str) and value in OPERATION_KINDS
+        elif key == 'wtd.break_type':
+            valid = isinstance(value, str) and value in ('page', 'column')
         elif key == 'wtd.mode':
             valid = isinstance(value, str) and value in ('live', 'fixture')
         elif key == 'wtd.outcome':
@@ -213,8 +221,11 @@ class Trace:
 
     def set(self, *, outcome=None, error_code=None, model=None, mode=None,
             job_id=None, prompt_sha256=None, source_revision=None,
-            input_tokens=None, output_tokens=None, response_model=None):
+            input_tokens=None, output_tokens=None, response_model=None,
+            operation_kind=None, break_type=None):
         proposed = {'wtd.outcome': outcome, 'wtd.error_code': error_code,
+                    'wtd.operation_kind': operation_kind,
+                    'wtd.break_type': break_type,
                     'gen_ai.request.model': model, 'wtd.mode': mode,
                     'gen_ai.response.model': response_model,
                     'wtd.job_id': job_id,
@@ -247,7 +258,7 @@ def _error_code(error):
 
 
 @contextmanager
-def transaction(name, *, job_id=None, mode=None, model=None):
+def transaction(name, *, job_id=None, mode=None, model=None, operation_kind=None):
     """A finite transaction inside the actual worker or review/download request.
 
     Pipeline calls reuse the worker's repair transaction. Later human requests open
@@ -255,7 +266,8 @@ def transaction(name, *, job_id=None, mode=None, model=None):
     """
     existing = _current.get()
     if name == 'repair.execute' and existing is not None and existing.name == name:
-        existing.set(job_id=job_id, mode=mode, model=model)
+        existing.set(job_id=job_id, mode=mode, model=model,
+                     operation_kind=operation_kind)
         yield existing
         return
     trace, isolation, current_scope_cm, raw_cm = Trace(name=name), None, None, None
@@ -272,7 +284,8 @@ def transaction(name, *, job_id=None, mode=None, model=None):
             current_scope.set_client(_client)
             raw_cm = sentry_sdk.start_transaction(name=name, op='task')
             trace.raw = raw_cm.__enter__()
-        trace.set(job_id=job_id, mode=mode, model=model, source_revision=source_revision())
+        trace.set(job_id=job_id, mode=mode, model=model, operation_kind=operation_kind,
+                  source_revision=source_revision())
     except Exception:
         trace.raw = None
     token = _current.set(trace)

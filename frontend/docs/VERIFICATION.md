@@ -88,6 +88,49 @@ the guard on the first pass. The guard now compares the route actually shown, an
 regression test renders inside `StrictMode` as `main.jsx` does. Focus still moves to
 `main` on a route *change*; only the first paint changed.
 
+## Section-start slice, and a crash the browser run found — 21 October 2026
+
+Run against the **production bundle** (`npm run build`, served by `vite preview` on
+127.0.0.1:5178) and the fixture-only QA backend on 127.0.0.1:8020, in real Chromium
+(153.0.8010.12) via Playwright. The QA service replaces `gemma_adapter.diagnose` with a
+function that raises, so **no model can be contacted even by accident**: nothing here
+is evidence about model quality.
+
+Script: `work/session2/browser_sections.cjs`.
+Summary: `work/session2/browser-section-summary.json`. **7/7 steps, 0 page errors.**
+
+| Step | Result |
+| --- | --- |
+| An unconvertible document lists its sections and offers **none** | `08-section-unsupported.docx`: `editable: false`, zero selectable buttons, the odd-page rule visible in the panel |
+| Only the eligible section is offered | `05-section-next-page.docx`: 2 sections, **1** selectable, the other showing "there is no previous section here, so changing it would repair nothing" |
+| Selecting is identification, not a request | the panel states "not a request to change it"; `aria-pressed` toggles under the keyboard |
+| Diagnosis to candidate | `operation_kind: section_start_change`, `plan_schema_version: 3`, `rendering_required: true`, `rendering_satisfied: true`, `invariant_failures: []`; the id the UI sent equals the id the job recorded |
+| Review screen | both rendered previews present, "nextPage → continuous" stated, and the panel explicitly says it **does not guarantee a page disappears** |
+| Download refused before approval | HTTP **409** |
+| Explicit acceptance, then download | HTTP **200**, sha256 `c48b744c65b81812929bc58d1914538fb758c6f75a745c0d807d700e00bd3699` — **byte-identical to the reviewed candidate**. The downloaded file inspects as `[nextPage, continuous]` |
+| No horizontal overflow at 390px | passed |
+
+The break walkthrough (`work/session1-demo/browser_breaks.cjs`) was re-run against
+this same current code: **5/5 steps, 0 page errors**, two page breaks in one
+paragraph rendered distinguishably, the **second** chosen, download sha256
+`a14006b18c9cbdbe4bdb343f3c452e677dc37792ac8fa416a2ce6cf43352b565` byte-identical to the reviewed candidate, and the downloaded file holding
+4 breaks of which 2 remain removable.
+
+### A real defect this found
+
+The first section run failed at acceptance with
+`TypeError: Cannot read properties of undefined (reading 'replace')`. The job had in
+fact been **accepted on the server** — the failure was purely in the results view,
+which summarised every proposed operation as `¶{paragraph_id} · {field}` and so
+crashed on any operation without a `field`. Two other call sites had the same
+assumption and would have rendered "undefined break" for a section change.
+
+Fixed by giving `App.jsx` one description helper per operation shape, covering a
+paragraph property, a break removal and a section-start change. The bundle was
+rebuilt and the walkthrough re-run clean. **The jsdom suite did not catch this**,
+because it never drove a section job as far as the results screen; that is exactly
+the gap a real browser run exists to close.
+
 ## Not verified
 
 - **Chromium only.** Firefox and WebKit were not driven.
@@ -104,8 +147,16 @@ regression test renders inside `StrictMode` as `main.jsx` does. Focus still move
 - **Hosted Sentry tracing is unverified.** Local envelope tests only; see
   `../../OBSERVABILITY.md`.
 
-The jsdom suite is now **24 tests**, and a jsdom test is still not a browser check.
-Both kinds of evidence are kept separate in `../../TEST_RESULTS.md`.
+- **No live model in any browser run.** Every browser diagnosis above is an injected
+  fixture against a QA service that cannot reach a model. The live model runs are
+  reported separately, and the one performed this session **failed** — see
+  `../../TEST_RESULTS.md`.
+
+The jsdom suite is now **34 tests** (32 before this session, plus two covering the
+section panel: that only the eligible section is a button and that the other shows
+its refusal, and that selecting a section states it is not a request and releases a
+selected break). A jsdom test is still not a browser check, and the defect above is
+the proof. Both kinds of evidence are kept separate in `../../TEST_RESULTS.md`.
 
 ## Manual browser checklist
 

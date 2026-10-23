@@ -1,0 +1,41 @@
+# Render Blueprint for the PUBLIC STATIC DEMO only.
+#
+# This deploys the React interface as static files. It deploys no Python, no model
+# and no renderer, so the hosted site cannot diagnose or repair a real document: it
+# runs in the interface's explicitly labelled sample mode. See DEPLOYMENT.md part B.
+#
+# Two things are deliberately absent and should stay absent:
+#
+#   * No environment variables. Every VITE_* value is compiled into the public
+#     JavaScript bundle, so none of them may ever carry a DSN, key or token.
+#   * No API base URL. A page served from onrender.com must never try to reach
+#     http://127.0.0.1 - that address belongs to the visitor's machine, not to any
+#     server. With no base configured the connection check simply fails, the
+#     interface shows its connection banner, and the visitor chooses the sample
+#     explicitly. A failed live request never becomes a silent sample success.
+#
+# Verified against this repository: the frontend lives in `frontend/`, its
+# package.json defines a `build` script, and vite.config.js does not override
+# build.outDir, so Vite's default `dist` is correct.
+
+services:
+  - type: web
+    runtime: static
+    name: what-the-doc-demo
+    rootDir: frontend
+    buildCommand: npm ci && npm run build
+    staticPublishPath: dist
+    pullRequestPreviewsEnabled: false
+    routes:
+      # The interface uses client-side routing. Without this, a refresh on any route
+      # other than / returns 404 from the static host.
+      - type: rewrite
+        source: /*
+        destination: /index.html
+    headers:
+      - path: /*
+        name: X-Content-Type-Options
+        value: nosniff
+      - path: /*
+        name: Referrer-Policy
+        value: no-referrer

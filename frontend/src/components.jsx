@@ -1,6 +1,6 @@
 import React from 'react';
 import {ArrowUpRight, FileText, SlidersHorizontal, Check, Upload, ScanLine, AlertCircle, Wifi, WifiOff, Loader} from 'lucide-react';
-import {resolveUrl, errorText} from './api';
+import {resolveUrl, errorText, breakLabel} from './api';
 import {paragraphs,steps} from './data';
 export function Brand(){return <a className="brand" href="#home">What the Doc?!<FileText aria-hidden="true"/></a>;}
 export function Header({route}){return <header className="header"><Brand/><nav aria-label="Main navigation"><a href="#guide" aria-current={route==='guide'?'page':undefined}>How it works</a><a href="#history" aria-current={route==='history'?'page':undefined}>My documents</a><a className="nav-pill" href="#upload">Open workspace <ArrowUpRight/></a><a className="icon-button" href="#settings" aria-label="Settings"><SlidersHorizontal/></a></nav></header>;}
@@ -87,4 +87,103 @@ export function ModeBadge({job}){
  return job.is_live_model_answer
   ? <Badge tone="quiet">LIVE MODEL ANSWER · {job.model}</Badge>
   : <Badge tone="warning"><AlertCircle/> FIXTURE — INJECTED BY A DEVELOPER, NOT A MODEL</Badge>;
+}
+
+/* ---- Explicit breaks. Everything here renders what /breaks returned. ---- */
+
+/** The one selector for identified breaks.
+ *
+ * Two breaks in the same paragraph are the case this exists for, so each row carries
+ * its ordinal AND the text either side of it: an id is not something a person can
+ * tell apart. A break the engine will refuse is listed too, disabled, with the
+ * server's own reason, because hiding it would make "why can't I pick that one?"
+ * unanswerable. Nothing here is phrased as a recommendation: a deliberate break is
+ * not a fault, and only the person reading the document can say which it is.
+ */
+export function BreakSelector({report, paragraphId, selectedId, onSelect, disabled=false}){
+ if(!report) return null;
+ const all=report.breaks||[];
+ const here=all.filter(b=>b.paragraph_id===paragraphId);
+ const elsewhere=all.length-here.length;
+ if(!here.length) return <div className="break-panel"><span className="eyebrow">EXPLICIT BREAKS</span>
+  <p className="fineprint">No page or column break element in this paragraph.{elsewhere?` ${elsewhere} elsewhere in the document.`:''} A “page break before” paragraph setting is a different thing and is listed with the properties above.</p></div>;
+ return <div className="break-panel"><span className="eyebrow">EXPLICIT BREAKS IN THIS PARAGRAPH</span>
+  <ul className="break-list">
+   {here.map((b,i)=>{
+    const key=b.target_id||`lrpb-${i}`;
+    const pickable=b.edit_eligible&&!disabled;
+    return <li key={key} className={`break-item ${selectedId===b.target_id?'selected':''} ${b.edit_eligible?'':'blocked'}`}>
+     <button type="button" disabled={!pickable} aria-pressed={selectedId===b.target_id}
+      onClick={()=>onSelect?.(selectedId===b.target_id?null:b.target_id)}>
+      <span className="break-head">
+       <strong>{b.kind==='last_rendered_page_break'?'Last rendered page break':breakLabel(b)}</strong>
+       <Badge tone={b.edit_eligible?'':'warning'}>{b.edit_eligible?(b.break_type||'').toUpperCase():'NOT REMOVABLE'}</Badge>
+      </span>
+      <span className="break-context">
+       <i>…{b.text_before||'(start of paragraph)'}</i>
+       <em aria-label="the break itself">↵ break ↵</em>
+       <i>{b.text_after||'(end of paragraph)'}…</i>
+      </span>
+      {b.edit_eligible?null:<small className="break-reason">{b.ineligible_reason}</small>}
+     </button></li>;})}
+  </ul>
+  <p className="fineprint">{elsewhere?`${elsewhere} more break${elsewhere===1?'':'s'} elsewhere in this document. `:''}Selecting a break says which one you mean. It is not a request to remove it, and a break you inserted on purpose is not a fault.</p></div>;
+}
+
+/** What a proposal is actually about to delete, shown before any approval. */
+export function BreakTargetList({job}){
+ const targets=job?.break_targets;
+ if(!targets?.length) return null;
+ return <div className="break-panel"><span className="eyebrow">THE BREAK BEING REMOVED</span>
+  {targets.map((t,i)=><div className="break-target" key={t.target_id||i}>
+   <strong>{breakLabel(t)}</strong>
+   <span className="break-context"><i>…{t.text_before||'(start of paragraph)'}</i><em>↵ this break ↵</em><i>{t.text_after||'(end of paragraph)'}…</i></span>
+   <small>Only this <code>w:br</code> element is deleted. The run holding it, its formatting, the text either side and every other break stay as they are.</small>
+  </div>)}</div>;
+}
+
+/** Page counts before and after, stated without promising a reduction. */
+export function PageCountChange({job}){
+ const c=job?.visual_comparison;
+ if(!c) return null;
+ const delta=c.page_count_delta;
+ return <p className="page-delta"><strong>{c.before_pages} page{c.before_pages===1?'':'s'} → {c.after_pages} page{c.after_pages===1?'':'s'}</strong>{' '}
+  {delta===0
+   ?'The page count is unchanged. The document reflowed without losing a page, which is a normal result: removing a break does not have to change how many pages there are.'
+   :`${delta<0?'One or more pages fewer':'More pages'} (${delta>0?'+':''}${delta}). A page-count change is something to look at, not an approval.`}</p>;
+}
+
+/** Section boundaries. One conversion is offered; everything else is read-only. */
+export function SectionList({report,selectedId,onSelect,disabled=false}){
+ const sections=report?.sections;
+ if(!sections?.length) return null;
+ const any=sections.some(s=>s.edit_eligible);
+ const describe=s=><>
+   <strong>Section {s.section_index+1} · starts {s.start_type}{s.start_type_is_default?' (schema default; no w:type written)':''}</strong>
+   <small>{s.governs}. {s.columns?.count===1?'Single column':`${s.columns.count} columns`}. Defined in {s.defined_in==='body'?'the body’s final sectPr':'that paragraph’s properties'}.</small>
+  </>;
+ return <div className="break-panel"><span className="eyebrow">SECTIONS{any?'':' · NOTHING CONVERTIBLE HERE'}</span>
+  <ul className="section-list">{sections.map(s=><li key={s.section_index}>
+   {s.edit_eligible&&onSelect
+    ?<button type="button" className={`break-option ${selectedId===s.target_id?'selected':''}`} disabled={disabled}
+       aria-pressed={selectedId===s.target_id}
+       onClick={()=>onSelect(selectedId===s.target_id?null:s.target_id)}>
+      {describe(s)}
+      <Badge>CAN BECOME CONTINUOUS</Badge>
+     </button>
+    :<>{describe(s)}{s.ineligible_reason?<small className="break-reason">{s.ineligible_reason}</small>:null}</>}
+  </li>)}</ul>
+  <p className="fineprint">Only one section change exists: a <code>nextPage</code> start can be asked to become <code>continuous</code>. Columns, page size, margins, numbering, headers, footers and the section boundaries themselves cannot be changed. Selecting a section says which one you mean; it is not a request to change it, and a section break you inserted on purpose is not a fault. Paragraph numbers here are body-paragraph ids, not page numbers.</p></div>;
+}
+
+/** What a section proposal is actually about to change, shown before any approval. */
+export function SectionTargetList({job}){
+ const targets=job?.section_targets;
+ if(!targets?.length) return null;
+ return <div className="break-panel"><span className="eyebrow">THE SECTION BEING CHANGED</span>
+  {targets.map((t,i)=><div className="break-target" key={t.target_id||i}>
+   <strong>Section {(t.section_index??0)+1} · {t.start_type} → continuous</strong>
+   <span className="break-context"><i>{t.governs}</i></span>
+   <small>Only the <code>w:type</code> of this one <code>w:sectPr</code> is rewritten. The number of sections, where each one begins and ends, its columns, page size, margins, numbering, headers and footers all stay exactly as they are. Continuous asks the section to continue on the same page; it does not guarantee a page disappears, because page geometry and other settings can still force one.</small>
+  </div>)}</div>;
 }

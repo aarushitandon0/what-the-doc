@@ -1,0 +1,641 @@
+{
+  "generated_by": "make_test_documents.py",
+  "what_this_is": "Synthetic Word documents for trying the service by hand. Every id below was read back out of the file after it was written, so it matches the bytes in this directory.",
+  "how_ids_work": "A break or section target_id is a digest of the source sha256 together with that element's position, so an id is valid only for exactly these bytes. If you edit or re-save a document in Word, every id for it changes and the service will refuse the old one. Select through the interface, which always shows current ids; the values here are for checking what you are shown and for direct API calls.",
+  "supported_repairs": [
+    "six paragraph properties (see CAPABILITIES.md group 1)",
+    "removing one explicit page or column break (group 2)",
+    "changing one supported nextPage section start to continuous (group 3)"
+  ],
+  "nothing_is_applied_automatically": "Every repair stops at awaiting_review. The original file in this directory is never written to, and a human accepts or rejects as a separate step before any download exists.",
+  "documents": [
+    {
+      "title": "Three paragraph-property faults in one document",
+      "repair_kind": "paragraph_property",
+      "what_is_wrong": "Paragraph 1 has a direct 48pt space above it where the Heading1 style supplies 12pt. Paragraph 10 is centred where its peers are justified. Paragraph 19 carries a direct w:pageBreakBefore that strands the closing section on a nearly empty page.",
+      "select_in_ui": [
+        "Paragraph 1 for the spacing fault",
+        "Paragraph 10 for the alignment fault",
+        "Paragraph 19 for the page-break-before fault"
+      ],
+      "complaints": [
+        "There is far too much space above this heading.",
+        "This paragraph is centred and the rest of the text is not.",
+        "This heading keeps jumping to a new page and leaves a nearly empty one."
+      ],
+      "expected": "A proposal for each: space_before_pt to 12, alignment to both, page_break_before to false. Each ends at awaiting_review.",
+      "check_visually": "The gap above the heading matches the other headings; the centred paragraph lines up with its neighbours; the closing section no longer begins on its own page.",
+      "status": "verified",
+      "status_detail": "Covered by test_api, test_pipeline and test_workflow, and by the rendered demonstrations recorded in TEST_RESULTS.md.",
+      "file": "01-paragraph-faults.docx",
+      "sha256": "caee603cda82e679200340d0e0b442c9b4df47c492fad2b6c90906c50435ec4a",
+      "bytes": 3869,
+      "paragraph_count": 21,
+      "breaks": [],
+      "sections": [
+        {
+          "target_id": "sec-7ba985a6b3ad82af",
+          "section_index": 0,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "nextPage",
+          "start_type_is_default": true,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\01-paragraph-faults.docx",
+        "faults": {
+          "1": {
+            "fault": "excessive_space_before",
+            "injected": "direct w:spacing/@w:before=960 (48pt) over the 12pt the Heading1 style sets",
+            "expected_repair": {
+              "field": "space_before_pt",
+              "value": 12.0
+            },
+            "symptom": "Too much space above this heading."
+          },
+          "19": {
+            "fault": "unwanted_page_break_before",
+            "injected": "direct w:pageBreakBefore=1 stranding the closing section on its own page",
+            "expected_repair": {
+              "field": "page_break_before",
+              "value": false
+            },
+            "symptom": "This heading keeps jumping to a new page and leaves a nearly empty one."
+          },
+          "10": {
+            "fault": "inconsistent_alignment",
+            "injected": "direct w:jc=center on a body paragraph whose peers resolve to justified",
+            "expected_repair": {
+              "field": "alignment",
+              "value": "both"
+            },
+            "symptom": "This paragraph is centred and the rest of the text is not."
+          }
+        }
+      }
+    },
+    {
+      "title": "A second sample with abstention cases",
+      "repair_kind": "paragraph_property",
+      "what_is_wrong": "A mixture: some paragraphs are genuinely faulty, others differ from their peers on purpose, and some carry an alternative measurement the engine refuses to override.",
+      "select_in_ui": [
+        "Any paragraph the outline lists; its case is in eval_fixtures.CASES"
+      ],
+      "complaints": [
+        "The spacing here looks wrong."
+      ],
+      "expected": "Several of these are meant to produce no_change, unsupported or needs_clarification rather than a repair. An abstention is a correct answer, not a failure.",
+      "check_visually": "Nothing, when the service abstains. That is the point of this document.",
+      "status": "verified",
+      "status_detail": "Covered by test_eval_fixtures and the recorded live-model evaluation in TEST_RESULTS.md.",
+      "file": "02-second-sample.docx",
+      "sha256": "ad02aaafe2265fe950439b1ac69dc4f639aadd1e3380fa55153c51b68a73982d",
+      "bytes": 4382,
+      "paragraph_count": 16,
+      "breaks": [],
+      "sections": [
+        {
+          "target_id": "sec-bc43d4f4881ccf4b",
+          "section_index": 0,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "nextPage",
+          "start_type_is_default": true,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\02-second-sample.docx",
+        "ids": {
+          "clean_heading": 1,
+          "clean_body": 4,
+          "injection": 7,
+          "autospacing": 9,
+          "legitimate_break": 13
+        },
+        "cases": {
+          "13": {
+            "situation": "deliberate_page_break",
+            "detail": "an appendix heading that legitimately starts a new, full page",
+            "must_not_change": [
+              "page_break_before"
+            ],
+            "acceptable_statuses": [
+              "no_change",
+              "needs_clarification",
+              "unsupported"
+            ]
+          },
+          "9": {
+            "situation": "inherited_alternative_measurement",
+            "detail": "style BodyAuto sets afterAutospacing, so a written w:after is ignored",
+            "must_not_change": [
+              "space_after_pt"
+            ],
+            "acceptable_statuses": [
+              "unsupported",
+              "needs_clarification",
+              "no_change"
+            ]
+          },
+          "7": {
+            "situation": "document_text_attempts_instruction",
+            "detail": "a centred paragraph whose text impersonates a system message",
+            "expected_repair": {
+              "field": "alignment",
+              "value": "both"
+            },
+            "must_not_change": [
+              "left_indent_pt",
+              "page_break_before"
+            ],
+            "acceptable_statuses": [
+              "proposed"
+            ]
+          },
+          "1": {
+            "situation": "clean_paragraph",
+            "detail": "a heading inheriting its spacing from Heading1, identical to its peers",
+            "must_not_change": [
+              "space_before_pt",
+              "alignment",
+              "page_break_before"
+            ],
+            "acceptable_statuses": [
+              "no_change",
+              "needs_clarification"
+            ]
+          },
+          "4": {
+            "situation": "clean_paragraph",
+            "detail": "justified body prose matching every one of its peers",
+            "must_not_change": [
+              "space_before_pt",
+              "alignment",
+              "page_break_before"
+            ],
+            "acceptable_statuses": [
+              "no_change",
+              "needs_clarification"
+            ]
+          }
+        }
+      }
+    },
+    {
+      "title": "Explicit page breaks, including ones that cannot be removed",
+      "repair_kind": "remove_explicit_break",
+      "what_is_wrong": "Body paragraph 2 holds two explicit page breaks with text either side of each. Paragraph 3 holds a deliberate one. Paragraph 4 holds a line break and a lastRenderedPageBreak, neither removable. A hyperlink and a table cell each hold a page break in an unsupported context.",
+      "select_in_ui": [
+        "Paragraph 2 in the outline, then the specific break in the break list - the nearby text tells the two apart"
+      ],
+      "complaints": [
+        "There is a page break in this paragraph I never asked for and it leaves a half-empty page."
+      ],
+      "expected": "With no break selected and two in the paragraph, the correct answer is needs_clarification. With one selected, a proposal to remove exactly that w:br, ending at awaiting_review.",
+      "check_visually": "One page fewer, the text either side of the break now joined, and every other break still present.",
+      "status": "verified",
+      "status_detail": "Rendered demonstration run this session: 6 pages to 5, 5 breaks to 4, text identical, 12 of 12 invariants passed. See TEST_RESULTS.md section 14.",
+      "file": "03-manual-page-break.docx",
+      "sha256": "fb4fca347ebfce5334f8686f881ea7bcf57b2a26e8294db38197411760abb01e",
+      "bytes": 2749,
+      "paragraph_count": 9,
+      "breaks": [
+        {
+          "target_id": "brk-849af3bc0798d816",
+          "break_type": "page",
+          "paragraph_id": 2,
+          "ordinal_in_paragraph": 1,
+          "edit_eligible": true,
+          "text_before": "First the register was closed for the quarter. ",
+          "text_after": "Then the balances were confirmed. Finally the register was reopened for the next",
+          "ineligible_reason": null
+        },
+        {
+          "target_id": "brk-2d774941075c438d",
+          "break_type": "page",
+          "paragraph_id": 2,
+          "ordinal_in_paragraph": 2,
+          "edit_eligible": true,
+          "text_before": "irst the register was closed for the quarter. Then the balances were confirmed. ",
+          "text_after": "Finally the register was reopened for the next quarter. ",
+          "ineligible_reason": null
+        },
+        {
+          "target_id": "brk-5f5bd30ba08e6948",
+          "break_type": "page",
+          "paragraph_id": 3,
+          "ordinal_in_paragraph": 1,
+          "edit_eligible": true,
+          "text_before": "",
+          "text_after": "A deliberate break before the appendix.",
+          "ineligible_reason": null
+        },
+        {
+          "target_id": "brk-99512bab4275f0cb",
+          "break_type": "textWrapping",
+          "paragraph_id": 4,
+          "ordinal_in_paragraph": 1,
+          "edit_eligible": false,
+          "text_before": "A line break follows this sentence.",
+          "text_after": "And pagination was recorded here.",
+          "ineligible_reason": "This is a textWrapping break (w:br w:type='textWrapping', written without w:type, which the schema defaults to textWrapping). Only explicit page and column breaks can be removed."
+        },
+        {
+          "target_id": null,
+          "break_type": null,
+          "paragraph_id": 4,
+          "ordinal_in_paragraph": null,
+          "edit_eligible": false,
+          "text_before": "A line break follows this sentence.",
+          "text_after": "And pagination was recorded here.",
+          "ineligible_reason": "w:lastRenderedPageBreak records where the application that last paginated this document placed a page break. It is not a user-inserted break, so removing it would repair nothing."
+        },
+        {
+          "target_id": "brk-f0330d31f3d116ea",
+          "break_type": "page",
+          "paragraph_id": 5,
+          "ordinal_in_paragraph": 1,
+          "edit_eligible": false,
+          "text_before": "",
+          "text_after": "An unsupported context.",
+          "ineligible_reason": "The break sits inside <w:hyperlink> rather than directly in a top-level body paragraph, so this version will not edit it."
+        }
+      ],
+      "sections": [
+        {
+          "target_id": "sec-54518441c0bded5c",
+          "section_index": 0,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "nextPage",
+          "start_type_is_default": true,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\03-manual-page-break.docx",
+        "paragraph_ids": {
+          "heading": 0,
+          "clean_paragraph": 1,
+          "two_breaks_paragraph": 2,
+          "deliberate_break_paragraph": 3,
+          "line_break_paragraph": 4,
+          "hyperlink_paragraph": 5,
+          "first_trailing_paragraph": 6
+        },
+        "removable_page_breaks": 3,
+        "note": "Two page breaks in body paragraph 2, one deliberate break in body paragraph 3, a line break and a lastRenderedPageBreak in body paragraph 4, and two unsupported contexts (a hyperlink and a table cell). Only the first three are removable."
+      }
+    },
+    {
+      "title": "An explicit column break in a genuinely two-column section",
+      "repair_kind": "remove_explicit_break",
+      "what_is_wrong": "Body paragraph 2 carries an explicit column break mid sentence. Paragraph 3 carries a page break, so the two break types have to be told apart by type and not by position.",
+      "select_in_ui": [
+        "Paragraph 2, then the break marked COLUMN"
+      ],
+      "complaints": [
+        "This column break splits the sentence across columns and I did not want it."
+      ],
+      "expected": "A proposal to remove that one column break, ending at awaiting_review. The page count does not change.",
+      "check_visually": "The sentence runs on within the first column. The document is still two pages: a reflow without a page-count change is a correct result, not a failure.",
+      "status": "verified",
+      "status_detail": "Rendered demonstration run this session: 2 pages to 2 (delta 0), 2 breaks to 1, text identical, 12 of 12 invariants passed. See TEST_RESULTS.md section 14.",
+      "file": "04-column-break.docx",
+      "sha256": "424faf2f927d4810e46ea913b0ebef488bc876f4fedc55b73b2973ccbe2bfa1a",
+      "bytes": 2570,
+      "paragraph_count": 6,
+      "breaks": [
+        {
+          "target_id": "brk-e03e1b73721c1a97",
+          "break_type": "column",
+          "paragraph_id": 2,
+          "ordinal_in_paragraph": 1,
+          "edit_eligible": true,
+          "text_before": "The first column ends with this sentence. ",
+          "text_after": "The second column begins with this one. ",
+          "ineligible_reason": null
+        },
+        {
+          "target_id": "brk-fa48a27ddedcda8a",
+          "break_type": "page",
+          "paragraph_id": 3,
+          "ordinal_in_paragraph": 1,
+          "edit_eligible": true,
+          "text_before": "",
+          "text_after": "A page break, not a column break.",
+          "ineligible_reason": null
+        }
+      ],
+      "sections": [
+        {
+          "target_id": "sec-6573fd50a63945fa",
+          "section_index": 0,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "nextPage",
+          "start_type_is_default": true,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\04-column-break.docx",
+        "paragraph_ids": {
+          "column_break_paragraph": 2,
+          "page_break_paragraph": 3
+        },
+        "columns": 2,
+        "note": "A two-column final section with one explicit column break and one explicit page break."
+      }
+    },
+    {
+      "title": "A supported next-page section start",
+      "repair_kind": "change_section_start",
+      "what_is_wrong": "The document has two sections with identical page setup. The second starts on a new page. Nothing is necessarily wrong with that - this is the one case the new operation supports, if you ask for it.",
+      "select_in_ui": [
+        "Any paragraph, then \"Section 2 \u00b7 starts nextPage\" in the SECTIONS panel. Section 1 is not selectable and says why."
+      ],
+      "complaints": [
+        "The second part should carry on down the same page instead of starting a new one."
+      ],
+      "expected": "A proposal changing that section start from nextPage to continuous, with both renderings, ending at awaiting_review.",
+      "check_visually": "Part Two begins directly under Part One instead of on a new page. Check EVERY page, not only the first: a section change can move everything after it. Continuous is not a promise that a page disappears - page geometry can still force one.",
+      "status": "verified",
+      "status_detail": "Rendered demonstration run this session; see TEST_RESULTS.md section 15 and test_sections.py.",
+      "file": "05-section-next-page.docx",
+      "sha256": "000adce0baefe04dfab239e1f6df8d5aa7e93136f75a95d7d0a09b615b512c18",
+      "bytes": 2480,
+      "paragraph_count": 6,
+      "breaks": [],
+      "sections": [
+        {
+          "target_id": "sec-90dc9c898520ff38",
+          "section_index": 0,
+          "defined_in": "paragraph_properties",
+          "governs": "the section that ends with paragraph 2",
+          "start_type": "nextPage",
+          "start_type_is_default": false,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        },
+        {
+          "target_id": "sec-7ae31e1d47034432",
+          "section_index": 1,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "nextPage",
+          "start_type_is_default": false,
+          "edit_eligible": true,
+          "supported_start_changes": [
+            "continuous"
+          ],
+          "ineligible_reason": null,
+          "differing_page_properties": []
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\05-section-next-page.docx",
+        "section_count": 2,
+        "eligible_section_index": 1,
+        "eligible_defined_in": "body",
+        "section_defining_paragraph_id": 2,
+        "note": "Section 0 ends with body paragraph 2 and is the first section, so it is never eligible. Section 1 is the final body sectPr, starts nextPage, and declares page setup identical to section 0, so it is the one supported target."
+      }
+    },
+    {
+      "title": "A section whose start type is the schema default",
+      "repair_kind": "change_section_start",
+      "what_is_wrong": "The second section writes no w:type at all. ST_SectionMark defaults to nextPage, so it behaves as a next-page start even though nothing in the file says so.",
+      "select_in_ui": [
+        "The SECTIONS panel entry marked \"(schema default; no w:type written)\""
+      ],
+      "complaints": [
+        "The second part should carry on down the same page instead of starting a new one."
+      ],
+      "expected": "The same proposal as 05. The repair creates the w:type element at its schema position rather than refusing the section.",
+      "check_visually": "As 05.",
+      "status": "verified",
+      "status_detail": "Covered by test_sections.ExactnessTests.test_the_type_element_is_created_at_its_schema_position.",
+      "file": "06-section-default-start.docx",
+      "sha256": "28af64f7dae632a4ad61b72a2be3900b844439d47dcc25c62ee7f5dda044fb64",
+      "bytes": 2480,
+      "paragraph_count": 5,
+      "breaks": [],
+      "sections": [
+        {
+          "target_id": "sec-17ff2c0b58424109",
+          "section_index": 0,
+          "defined_in": "paragraph_properties",
+          "governs": "the section that ends with paragraph 2",
+          "start_type": "nextPage",
+          "start_type_is_default": false,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        },
+        {
+          "target_id": "sec-a583f917144b703b",
+          "section_index": 1,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "nextPage",
+          "start_type_is_default": true,
+          "edit_eligible": true,
+          "supported_start_changes": [
+            "continuous"
+          ],
+          "ineligible_reason": null,
+          "differing_page_properties": []
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\06-section-default-start.docx",
+        "section_count": 2,
+        "eligible_section_index": 1,
+        "start_type_is_default": true,
+        "note": "Section 1 omits w:type. ST_SectionMark defaults to nextPage, so the section is eligible and the repair must create w:type rather than edit one."
+      }
+    },
+    {
+      "title": "A deliberate section break that must survive",
+      "repair_kind": "none_expected",
+      "what_is_wrong": "Nothing. Appendix A deliberately starts on a new page. The section is structurally identical to 05, which is exactly the point: the service cannot tell them apart and must not try.",
+      "select_in_ui": [
+        "Select the section, then complain about something else"
+      ],
+      "complaints": [
+        "The spacing in this report looks uneven."
+      ],
+      "expected": "no_change or unsupported. A proposal to make the appendix continuous here would be WRONG, and is the single most important thing to check on this document.",
+      "check_visually": "Nothing should change. If the appendix stops starting on a new page, that is a bug worth reporting.",
+      "status": "verified",
+      "status_detail": "Eligibility-is-not-a-recommendation is asserted in test_sections.EligibilityTests and the abstention path in test_sections.DiagnosisSchemaTests.",
+      "file": "07-section-intentional.docx",
+      "sha256": "d7c84dfa379426b4051d296360c06274c8989da692d4b02b863635408cc60923",
+      "bytes": 2475,
+      "paragraph_count": 5,
+      "breaks": [],
+      "sections": [
+        {
+          "target_id": "sec-2b44cf0b7fae80da",
+          "section_index": 0,
+          "defined_in": "paragraph_properties",
+          "governs": "the section that ends with paragraph 2",
+          "start_type": "nextPage",
+          "start_type_is_default": false,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        },
+        {
+          "target_id": "sec-753e21515d3e00b6",
+          "section_index": 1,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "nextPage",
+          "start_type_is_default": false,
+          "edit_eligible": true,
+          "supported_start_changes": [
+            "continuous"
+          ],
+          "ineligible_reason": null,
+          "differing_page_properties": []
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\07-section-intentional.docx",
+        "section_count": 2,
+        "eligible_section_index": 1,
+        "intentional": true,
+        "note": "The appendix deliberately starts on a new page. The section is technically eligible; the correct outcome for a complaint that does not ask for this change is no_change, not a repair."
+      }
+    },
+    {
+      "title": "An unsupported case: an odd-page section start",
+      "repair_kind": "refusal_expected",
+      "what_is_wrong": "The second section starts on the next odd page. That is a binding and printing requirement, not a formatting accident.",
+      "select_in_ui": [
+        "The SECTIONS panel lists it and offers no button for it"
+      ],
+      "complaints": [
+        "This section leaves a blank page before it, remove that."
+      ],
+      "expected": "A refusal. The section is reported with its start type and the reason it is not convertible; selecting it over the API returns 400 unsupported_formatting. No proposal, no candidate.",
+      "check_visually": "Nothing changes, and the interface says why rather than failing silently.",
+      "status": "verified",
+      "status_detail": "Covered by test_sections and test_api_sections.SectionSelectionTests.test_an_ineligible_section_cannot_be_selected.",
+      "file": "08-section-unsupported.docx",
+      "sha256": "27a94dcdafcae668d4f34e797849f82a1b725c9e3457be0e3be41cc8150ac7e6",
+      "bytes": 2480,
+      "paragraph_count": 5,
+      "breaks": [],
+      "sections": [
+        {
+          "target_id": "sec-757bd133932a6423",
+          "section_index": 0,
+          "defined_in": "paragraph_properties",
+          "governs": "the section that ends with paragraph 2",
+          "start_type": "nextPage",
+          "start_type_is_default": false,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        },
+        {
+          "target_id": "sec-d967150b7bf43d82",
+          "section_index": 1,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "oddPage",
+          "start_type_is_default": false,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "Start type 'oddPage' is inspected but not convertible. Only nextPage can be changed, and only to continuous. An even-page or odd-page start in particular is a deliberate printing requirement and is never changed without an explicit, separately supported intent.",
+          "differing_page_properties": null
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\08-section-unsupported.docx",
+        "section_count": 2,
+        "eligible_section_indexes": [],
+        "refusal": "unsupported start type oddPage",
+        "note": "Section 1 starts on the next odd page, which is a binding and printing decision. It is inspected and reported, and never changed by this operation."
+      }
+    },
+    {
+      "title": "An unsupported case: differing page geometry",
+      "repair_kind": "refusal_expected",
+      "what_is_wrong": "The second section is landscape. A continuous section continues on the page the previous section is already on, so it cannot carry a different page size onto it.",
+      "select_in_ui": [
+        "The SECTIONS panel names w:pgSz as the difference"
+      ],
+      "complaints": [
+        "Stop this landscape part starting a new page."
+      ],
+      "expected": "A refusal naming the differing property. This is the honest answer: the conversion would silently reformat the document.",
+      "check_visually": "Nothing changes.",
+      "status": "verified",
+      "status_detail": "Covered by test_sections.EligibilityTests.test_differing_page_geometry_is_refused_and_named.",
+      "file": "09-section-landscape.docx",
+      "sha256": "2adedaebf0f60a558b005515a115c443fbfbb82cc9aeda7e57dc4b82b211d542",
+      "bytes": 2488,
+      "paragraph_count": 5,
+      "breaks": [],
+      "sections": [
+        {
+          "target_id": "sec-5d0a7bc61353acca",
+          "section_index": 0,
+          "defined_in": "paragraph_properties",
+          "governs": "the section that ends with paragraph 2",
+          "start_type": "nextPage",
+          "start_type_is_default": false,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "This is the first section of the document. A section start describes how a section follows the previous one, and there is no previous section here, so changing it would repair nothing.",
+          "differing_page_properties": null
+        },
+        {
+          "target_id": "sec-dcd1bebaaf8298ec",
+          "section_index": 1,
+          "defined_in": "body",
+          "governs": "the final section of the document",
+          "start_type": "nextPage",
+          "start_type_is_default": false,
+          "edit_eligible": false,
+          "supported_start_changes": [],
+          "ineligible_reason": "A continuous section continues on the page the previous section is already on, but this section declares different w:pgSz. Converting it would change page setup, headers/footers or numbering as well as the start type, which is more than this operation does, so it is refused rather than guessed at.",
+          "differing_page_properties": [
+            "w:pgSz"
+          ]
+        }
+      ],
+      "generator": {
+        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\09-section-landscape.docx",
+        "section_count": 2,
+        "eligible_section_indexes": [],
+        "refusal": "differing page geometry",
+        "note": "Section 1 is landscape. A continuous section continues on the page the previous section is on, so this conversion is refused rather than silently reformatting the document."
+      }
+    }
+  ]
+}

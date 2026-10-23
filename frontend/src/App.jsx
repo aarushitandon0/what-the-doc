@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useRef,useCallback} from 'react';
 import {ArrowUpRight,ArrowLeft,Check,FileText,Upload,Plus,Minus,X,ShieldCheck,Download,Clock,AlertCircle} from 'lucide-react';
-import {Header,Footer,DemoBanner,Steps,Badge,Button,PageHeading,Paper,Empty,ConnectionBanner,ApiErrorNote,JobProgress,PreviewPages,PropertyList,InvariantList,ModeBadge,OfflineHold} from './components';
+import {Header,Footer,DemoBanner,Steps,Badge,Button,PageHeading,Paper,Empty,ConnectionBanner,ApiErrorNote,JobProgress,PreviewPages,PropertyList,InvariantList,ModeBadge,OfflineHold,BreakSelector,BreakTargetList,PageCountChange,SectionList,SectionTargetList} from './components';
 import {paragraphs,validateFile,readHistory,report} from './data';
 import * as api from './api';
 
@@ -38,6 +38,13 @@ export default function App(){
  const [backend,setBackend]=useState({state:'checking',health:null,error:null});
  const [doc,setDoc]=useState(null),[docParagraphs,setDocParagraphs]=useState([]);
  const [liveSelected,setLiveSelected]=useState(null),[job,setJob]=useState(null);
+ /* Structural targets are server-issued, never composed here. `selectedBreak` and
+  * `selectedSection` each hold a target_id the server minted for THIS revision, and
+  * both are cleared whenever the document or the paragraph changes, so a stale id
+  * can never be sent. They are mutually exclusive: a break and a section are
+  * different repairs, approved separately, and the server refuses a job naming
+  * both. */
+ const [breaks,setBreaks]=useState(null),[sections,setSections]=useState(null),[selectedBreak,setSelectedBreak]=useState(null),[selectedSection,setSelectedSection]=useState(null);
  const [busy,setBusy]=useState(''),[apiError,setApiError]=useState(null),[elapsed,setElapsed]=useState(0);
  const [jobs,setJobs]=useState([]);
  const abort=useRef(null),clock=useRef(null);
@@ -59,9 +66,15 @@ export default function App(){
   const body=await api.getParagraphs(documentId);
   setDocParagraphs(body.paragraphs||[]);
   setLiveSelected(body.paragraphs?.[0]?.paragraph_id??null);
+  /* Breaks and sections come from the server for this revision. A failure here is
+   * reported and leaves them null: the UI then says nothing was inspected rather
+   * than implying the document has no breaks. */
+  setBreaks(null);setSections(null);setSelectedBreak(null);
+  try{setBreaks(await api.getBreaks(documentId));}catch(error){fail(error);}
+  try{setSections(await api.getSections(documentId));}catch(error){fail(error);}
  };
  const openDocument=async(record)=>{
-  setDemoChosen(false);setDoc(record);setJob(null);setApiError(null);
+  setDemoChosen(false);setDoc(record);setJob(null);setApiError(null);setSelectedBreak(null);
   try{await loadParagraphs(record.document_id);go('workspace');}catch(error){fail(error);}
  };
  const uploadReal=async(f)=>{
@@ -93,7 +106,7 @@ export default function App(){
   if(liveSelected===null){notify('Select a paragraph first.');return;}
   setApiError(null);setBusy('diagnosing');
   try{
-   const started=await api.createJob({documentId:doc.document_id,paragraphId:liveSelected,complaint,render:backend.health?.renderer?.available!==false,expectedSourceSha256:doc.source_sha256});
+   const started=await api.createJob({documentId:doc.document_id,paragraphId:liveSelected,complaint,render:backend.health?.renderer?.available!==false,expectedSourceSha256:doc.source_sha256,breakTargetId:selectedBreak,sectionTargetId:selectedSection});
    setJob(started);go('workspace');watch(started);
   }catch(error){fail(error);}finally{setBusy('');}
  };
@@ -124,7 +137,26 @@ export default function App(){
  const LIVE_ROUTES=['upload','workspace','review','results','clarify','history'];
  const paragraphLabel=(p)=>p.text?.trim()||'(empty paragraph)';
  const proposalRows=(job?.proposal?.operations)||[];
+ /* Three operation shapes exist and every summary has to cope with all of them:
+    a paragraph property, a break removal, and a section-start change. */
+ const opLabel=op=>op.operation==='change_section_start'?'section start'
+   :op.operation==='remove_explicit_break'?'remove break'
+   :`¶${op.paragraph_id} · ${String(op.field||'').replace(/_/g,' ')}`;
+ const opValue=op=>op.operation==='change_section_start'
+   ?`${op.expected_start_type} → ${op.new_start_type}`
+   :op.operation==='remove_explicit_break'?`${op.expected_break_type} break`
+   :String(op.value);
+ const opSentence=op=>op.operation==='change_section_start'
+   ?`one section start ${op.expected_start_type} → ${op.new_start_type}`
+   :op.operation==='remove_explicit_break'
+   ?`remove one ${op.expected_break_type} break`
+   :`¶${op.paragraph_id} ${String(op.field||'').replace(/_/g,' ')} → ${op.value}`;
  const previewReady=job?.preview?.rendered;
+ const breaksHere=(breaks?.breaks||[]).filter(b=>b.paragraph_id===liveSelected&&b.edit_eligible);
+ const renderUnavailable=backend.health?.renderer?.available===false;
+ /* A structural change the server will not accept unrendered. The button is disabled
+  * as a courtesy; the refusal itself lives in api.py and workflow.py. */
+ const structuralUnrendered=Boolean(job?.rendering_required&&!job?.rendering_satisfied);
 
  const liveUpload=()=><><a className="backlink" href="#home"><ArrowLeft/> Back to the good life</a>
   <PageHeading eyebrow="LET’S TAKE A LOOK" description="Your document goes to the local API on this machine, is opened with engine.open_package and is never modified.">Drop the document.<br/>Keep your cool.</PageHeading>
@@ -148,7 +180,9 @@ export default function App(){
   if(api.isPending(job))return <JobProgress job={job} elapsed={elapsed} onStopWatching={()=>abort.current?.abort()}/>;
   if(job?.state==='awaiting_review')return <><ModeBadge job={job}/><h2>A candidate<br/>to review.</h2>
    <p>{job.diagnosis?.explanation}</p>
-   <div className="property-table">{proposalRows.map((op,i)=><div key={i}><span>¶{op.paragraph_id} · {op.field.replace(/_/g,' ')}</span><strong>{String(op.value)}</strong></div>)}</div>
+   <div className="property-table">{proposalRows.map((op,i)=><div key={i}><span>{opLabel(op)}</span><strong>{opValue(op)}</strong></div>)}</div>
+   <BreakTargetList job={job}/>
+   <SectionTargetList job={job}/>
    <InvariantList job={job}/>
    <p className="fineprint">Reaching this state is not approval. Nothing of yours has been changed.</p>
    <a className="button primary full" href="#review">Review the change <ArrowUpRight/></a>
@@ -160,9 +194,12 @@ export default function App(){
    <ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>
    <label className="field-label" htmlFor="complaint">What looks wrong?</label>
    <textarea id="complaint" rows={4} value={complaint} onChange={e=>setComplaint(e.target.value)} placeholder="This heading is miles from the paragraph above it."/>
-   <div className="chips">{['Too much space above this heading','This paragraph is not aligned like the others','There is a page break that should not be here'].map(t=><button key={t} onClick={()=>setComplaint(t)}>{t}</button>)}</div>
+   <div className="chips">{['Too much space above this heading','This paragraph is not aligned like the others','This heading keeps jumping to a new page','There is a page break here I did not want','This column break splits the text oddly'].map(t=><button key={t} onClick={()=>setComplaint(t)}>{t}</button>)}</div>
    <div className="selection-detail"><span className="eyebrow">SELECTED PARAGRAPH</span><strong>{liveParagraph?`¶${liveParagraph.paragraph_id} · ${liveParagraph.style_id||'no style'}`:'None selected'}</strong><small>{liveParagraph?paragraphLabel(liveParagraph).slice(0,90):'Choose a paragraph in the outline.'}</small></div>
    <PropertyList paragraph={liveParagraph}/>
+   <BreakSelector report={breaks} paragraphId={liveSelected} selectedId={selectedBreak} onSelect={id=>{setSelectedBreak(id);if(id)setSelectedSection(null);}} disabled={api.isPending(job)}/>
+   {breaksHere.length>1&&!selectedBreak&&<p className="fineprint">This paragraph has {breaksHere.length} removable breaks. Pick the one you mean, or say which in your own words — nothing will guess for you.</p>}
+   {renderUnavailable&&breaksHere.length>0&&<p className="fineprint">LibreOffice is unavailable, so a break removal cannot be reviewed and the server will refuse it. Paragraph spacing, indent and alignment repairs still work.</p>}
    <Button className="full" disabled={backend.state!=='live'||busy==='diagnosing'||liveSelected===null} onClick={diagnoseLive}>{busy==='diagnosing'?'Starting…':<>Diagnose with Gemma <ArrowUpRight/></>}</Button>
    {backend.state!=='live'&&<p className="fineprint">Live diagnosis is unavailable: {backend.health?.model_runtime?.reason||'no Gemma runtime'}. Nothing is substituted in its place.</p>}
    <p className="fineprint">CPU inference takes 70–180 seconds per call. One job runs at a time.</p></>;
@@ -176,8 +213,9 @@ export default function App(){
   {api.isPending(job)&&<ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>}
   <div className="workspace">
    <aside className="outline-panel"><span className="eyebrow">IN THIS DOCUMENT</span>
-    <div className="outline-scroll">{docParagraphs.map(p=><button key={p.paragraph_id} disabled={api.isPending(job)} className={`outline-item ${liveSelected===p.paragraph_id?'selected':''}`} aria-pressed={liveSelected===p.paragraph_id} onClick={()=>{setLiveSelected(p.paragraph_id);setJob(null);}}>
+    <div className="outline-scroll">{docParagraphs.map(p=><button key={p.paragraph_id} disabled={api.isPending(job)} className={`outline-item ${liveSelected===p.paragraph_id?'selected':''}`} aria-pressed={liveSelected===p.paragraph_id} onClick={()=>{setLiveSelected(p.paragraph_id);setJob(null);setSelectedBreak(null);setSelectedSection(null);}}>
      <span>{p.paragraph_id}</span><span><strong>{paragraphLabel(p).slice(0,38)}</strong><small>{p.style_id||'no style'}</small></span></button>)}</div>
+    <SectionList report={sections} selectedId={selectedSection} disabled={api.isPending(job)} onSelect={id=>{setSelectedSection(id);if(id)setSelectedBreak(null);}}/>
     <a className="backlink" href="#upload"><Plus/> Different document</a></aside>
    <section className="canvas"><div className="canvas-label"><span>{previewReady?'RENDERED BY LIBREOFFICE':'DOCUMENT EVIDENCE'}</span><span>{job?`job ${job.job_id.slice(0,8)} · ${job.state}`:`document ${doc.document_id.slice(0,8)}`}</span></div>
     {previewReady
@@ -199,21 +237,24 @@ export default function App(){
     {view!=='proposed'&&<section><div className="compare-label">BEFORE <small>{job.preview?.before_page_count??'?'} pages</small></div><PreviewPages urls={job.preview?.before_urls||[]} label="Before"/></section>}
     {view!=='original'&&<section><div className="compare-label green">AFTER <small>{job.preview?.after_page_count??'?'} pages</small></div><PreviewPages urls={job.preview?.after_urls||[]} label="After" comparison={job.visual_comparison?.pages}/></section>}</div>
    <p className="fineprint">{job.preview?.note} Changed-pixel ratios are a review signal, not approval: a correct repair legitimately reflows later text.</p>
+   <PageCountChange job={job}/>
+   <BreakTargetList job={job}/>
+   <SectionTargetList job={job}/>
    <InvariantList job={job}/>
    <div className="review-bar"><div><Badge>{proposalRows.length} TARGETED CHANGE{proposalRows.length===1?'':'S'}</Badge>
-     <p>{proposalRows.map(op=>`¶${op.paragraph_id} ${op.field.replace(/_/g,' ')} → ${op.value}`).join(' · ')}</p></div>
+     <p>{proposalRows.map(opSentence).join(' · ')}</p></div>
     <div>{job.state==='accepted'
       ?<a className="button primary" href="#results">View accepted result <ArrowUpRight/></a>
       :job.state==='rejected'?<Badge tone="quiet">Rejected · original kept</Badge>
       :<><Button secondary disabled={busy==='rejecting'} onClick={rejectLive}>Keep original</Button>
-        <Button disabled={busy==='accepting'} aria-describedby={!previewReady?'structural-review-warning':undefined} onClick={acceptLive}>{busy==='accepting'?'Checking integrity…':<>{previewReady?'Accept this repair':'Accept after structural review'} <Check/></>}</Button></>}</div></div></>
+        <Button disabled={busy==='accepting'||structuralUnrendered} aria-describedby={!previewReady?'structural-review-warning':undefined} onClick={acceptLive}>{busy==='accepting'?'Checking integrity…':<>{structuralUnrendered?'Cannot accept without a render':previewReady?'Accept this repair':'Accept after structural review'} <Check/></>}</Button></>}</div></div></>
   :<Empty title="Nothing to review yet." onSample={openDemoDocument}>Run a diagnosis before comparing the pages.</Empty>;
 
  const liveResults=()=>job?.state==='accepted'
   ?<><div className="completion-icon"><Check/></div>
    <PageHeading eyebrow="THAT’S ONE LESS THING." description="The preservation invariants were re-run against the files on disk before the state changed.">Back to<br/>doing less.</PageHeading>
    <div className="receipt"><div className="receipt-head"><FileText/><div><strong>repaired-{job.job_id.slice(0,8)}.docx</strong><small>job {job.job_id}</small></div><Badge>ACCEPTED</Badge></div>
-    {proposalRows.map((op,i)=><div className="receipt-row" key={i}><span>¶{op.paragraph_id} · {op.field.replace(/_/g,' ')}</span><strong>{String(op.value)}</strong></div>)}
+    {proposalRows.map((op,i)=><div className="receipt-row" key={i}><span>{opLabel(op)}</span><strong>{opValue(op)}</strong></div>)}
     <div className="receipt-row"><span>Candidate sha256</span><strong>{job.candidate?.candidate_sha256?.slice(0,16)}…</strong></div>
     <div className="receipt-row"><span>Model</span><strong>{job.model} · {typeof job.latency_seconds==='number'?`${job.latency_seconds.toFixed(1)}s`:'—'}</strong></div></div>
    <InvariantList job={job}/>

@@ -1139,3 +1139,301 @@ all already happened. That download was verified against the server's accepted
 artifact directly on disk, and the run was then repeated with the variable set to
 produce the summary quoted in 12.2. A passing exit status from a wrapper is not
 evidence that the thing it wrapped passed.
+
+---
+
+## 13. Closing the explicit-break slice — 21 October 2026
+
+The previous session left `test_api_breaks` unconfirmed: its module log recorded
+`rc=0` but the captured output was truncated before the summary line, and a rerun log
+held only `elapsed=620s` with no result. Rather than infer anything from the exit
+code, the module was run again, to completion, with verbose output:
+
+```
+Ran 21 tests in 912.247s
+OK                                        (rc=0)
+```
+
+Record: `work/session2/test_api_breaks.log`. **21 tests, all passing.** That closes
+the open item; nothing in the earlier log needed to be trusted.
+
+One test in that module did have to change in this session, and it is worth being
+explicit about why. `test_sections_endpoint_is_read_only` asserted the old contract —
+that no section is ever editable and the reason reads "inspected only". That claim
+stopped being true when the section-start change shipped, so the test was **rewritten
+to assert the new, narrower truth** rather than deleted: the multicolumn fixture has
+exactly one section, which is therefore the *first* section and never eligible, and
+the endpoint now says so with that specific reason. A second test was added asserting
+that the only conversion offered anywhere is `nextPage` to `continuous`. The
+invariant was not weakened; the claim it makes was made more specific.
+
+## 14. Rendered demonstrations of break removal — 21 October 2026
+
+`work/session1-demo/demo_breaks.py` was executed. It contacts no model: the diagnosis
+is injected and labelled `INJECTED-FIXTURE-NO-MODEL`, while the engine, pipeline,
+candidate builder, preservation checks and LibreOffice renderer are the production
+ones. Records: `work/session1-demo/summary.json` and the per-case `evidence.json`.
+
+| | manual page break | manual column break |
+| --- | --- | --- |
+| Source | `work/session1-demo/page-break/original.docx` | `work/session1-demo/column-break/original.docx` |
+| Target | `brk-db99a64173c587c9` — page, paragraph 2, ordinal 1 of 2 | `brk-61113bc53a4b1a1b` — column, paragraph 2, ordinal 1 |
+| Candidate | `candidate-2ec5bc53-d6e0fe7a.docx` | `candidate-90176f8b-ae4b89cb.docx` |
+| Pages (LibreOffice) | **6 to 5**, delta −1 | **2 to 2, delta 0** |
+| Explicit breaks | 5 to 4 (removable 3 to 2) | 2 to 1 |
+| Every `w:t` character preserved | yes | yes |
+| Original sha256 unchanged | yes | yes |
+| Preservation invariants | **12/12 passed, 0 failures** | **12/12 passed, 0 failures** |
+| Outcome | `awaiting_review` — nothing accepted | `awaiting_review` |
+
+The column case is the one that matters most for honesty: the document reflowed and
+**kept both pages**. The service reports `delta 0` and says in the interface that a
+reflow without a page-count change is a normal result. Nothing claims a page was
+saved.
+
+Both demonstrations ended at `awaiting_review`. Neither was accepted by the script;
+acceptance is a separate, explicit act and was exercised separately in the browser
+runs below.
+
+## 15. The new section-start change — 21 October 2026
+
+### 15.1 What was built
+
+One operation: `change_section_start`, converting a supported `nextPage` section
+start to `continuous`. Plan schema version **3** (break plans still declare 2; plans
+with no version are still read as 1 and still work). It is wired through inspection,
+selection, the diagnosis schema, engine validation, candidate creation, a required
+rendered review, explicit acceptance or rejection, and a guarded download.
+
+The eligibility rules come from ISO/IEC 29500-1 section 17.6.22, which states that a
+section's type specifies how that section is placed *relative to the previous
+section*, and that a continuous section "begins the new section on the following
+paragraph". Verified against the current Microsoft-hosted reproduction of that clause
+during this session.
+
+### 15.2 Rendered demonstration
+
+`work/session2/demo_sections.py`, injected diagnosis, production engine and renderer.
+Record: `work/session2/section-summary.json`.
+
+| | supported next-page | omitted start type (schema default) |
+| --- | --- | --- |
+| Source sha256 | `9100a278b158dcc1…` | `f6fd8c1294424…` |
+| Candidate sha256 | `8e329c3b0054ca2c…` | `eea90ba8b6d26…` |
+| Target | `sec-c914e16cd11db71d` — section 1, defined in `body`, *governs the final section*, paragraphs 3–5 | `sec-730d42da83d52bd1` — section 1, `start_type_is_default: true`, paragraphs 3–4 |
+| Start types | `[nextPage, nextPage]` to `[nextPage, continuous]` | same |
+| Section count | 2 to 2 | 2 to 2 |
+| Section boundaries | identical | identical |
+| Pages (LibreOffice) | **2 to 1** | **2 to 1** |
+| Per-page comparison | page 1 changed_ratio 0.1215; page 2 gone | page 1 changed_ratio 0.07345; page 2 gone |
+| `w:type` created at its schema position | n/a (already present) | **yes** — `created_type_element: true`, written before `w:pgSz` |
+| Every `w:t` character preserved | yes | yes |
+| Preservation invariants | **12/12 passed, 0 failures** | **12/12 passed, 0 failures** |
+| Outcome | `awaiting_review` | `awaiting_review` |
+
+Every rendered page was compared, not only the first, because a section change can
+move the layout of everything after it.
+
+**The page count dropped here. That is a result, not a guarantee.** Page geometry,
+column settings and keep-with-next rules can still force pagination, and the
+interface, the API and `CAPABILITIES.md` all say so rather than promising a
+reduction.
+
+### 15.3 Refusals, with the rule each one hit
+
+Also recorded in `work/session2/section-summary.json`, under `refusals`.
+
+| Fixture | Any section editable | Rule |
+| --- | --- | --- |
+| `single_section` | no | first section of the document — "a section start describes how a section follows the previous one, and there is no previous section here" |
+| `odd_page_start` | no | `oddPage` is inspected but not convertible — "a deliberate printing requirement … never changed without an explicit, separately supported intent" |
+| `differing_geometry` | no | names **`w:pgSz`** in `differing_page_properties` |
+| `differing_page_numbering` | no | names **`w:pgNumType`** |
+
+Two more refusals are asserted at the XML level, where building an invalid package
+would prove nothing: a differing `w:headerReference`, and a section carrying a
+tracked revision (`w:sectPrChange`).
+
+### 15.4 How exactness is established
+
+Not by trusting the code that made the change. `engine._verify_section_changes` takes
+the document that was written, reverts exactly the approved attribute on a copy of
+it, and requires the result to serialise **byte-for-byte identically to the input**.
+Any other edit anywhere survives that revert and fails the comparison, which is also
+what makes the body-level `w:sectPr` safe to touch — it sits outside every paragraph
+and so is not covered by the per-paragraph comparison the other operations use. A
+test deliberately alters a second, unapproved section and confirms it is caught.
+
+On top of that, `workflow.check_invariants` gains four section-specific checks
+against the files on disk: `section_count_preserved`, `section_boundaries_preserved`,
+`only_approved_section_start_changed`, and `section_properties_preserved` (every
+sectPr with its `w:type` removed, byte-identical). The strict `runs_preserved` check
+that a break removal has to narrow is **not** narrowed here — a section change
+touches no run, so it still faces the strict version. No invariant was weakened
+globally to let section mutation pass.
+
+A section plan is required to carry **exactly one operation**. That is not a
+convenience: it is what makes the whole-document revert comparison available at all.
+
+### 15.5 Real browser walkthroughs
+
+Production bundle served by `vite preview` on 127.0.0.1:5178, fixture-only QA backend
+on 127.0.0.1:8020 (its `gemma_adapter.diagnose` raises, so no model can be reached
+even by accident), real Chromium via Playwright.
+
+**Section flow** — `work/session2/browser_sections.cjs`,
+`browser-section-summary.json`: **7/7 steps, 0 page errors.** An unconvertible
+document offered zero selectable sections and showed its rule; the supported document
+offered exactly one; the review screen stated the `nextPage` to `continuous` change,
+showed both rendered previews, and carried the "does not guarantee a page disappears"
+wording; download before acceptance returned **409**; after explicit acceptance it
+returned **200** with sha256 `c48b744c65b81812…`, **byte-identical to the reviewed
+candidate**, and the downloaded file inspects as `[nextPage, continuous]`.
+
+**Break flow re-run against this same current code** —
+`work/session1-demo/browser_breaks.cjs`, `browser-break-summary.json`: **5/5 steps, 0
+page errors**, two page breaks in one paragraph rendered distinguishably, the
+**second** selected, download sha256 `a14006b18c9cbdbe…` byte-identical to the
+reviewed candidate, downloaded file holding 4 breaks of which 2 remain removable.
+
+**A real defect was found by this.** The first section walkthrough failed at
+acceptance with `TypeError: Cannot read properties of undefined (reading 'replace')`.
+The job had been **accepted on the server**; the crash was in the results view, which
+summarised every operation as paragraph-id-plus-field and so broke on any operation
+without a `field`. Two other call sites shared the assumption. Fixed with one
+description helper per operation shape, rebuilt, and re-run clean. The jsdom suite
+had not caught it because it never drove a section job to the results screen.
+
+### 15.6 Microsoft Word, as an independent check
+
+Word 16 was installed and **not running**, so `word_check.ps1` — which refuses to
+start if Word is already open, opens read-only with macros disabled and always quits
+without saving — could be used without disturbing a user session. Every original and
+candidate from sections 14 and 15 was opened in Word and asked for its own counts.
+Record: `work/session2/word-check.json`.
+
+| Document (original / candidate) | Word pages | Word words | LibreOffice pages |
+| --- | --- | --- | --- |
+| section supported | 2 / **1** | 480 / 480 | 2 / **1** |
+| section default-start | 2 / **1** | 361 / 361 | 2 / **1** |
+| break page | 6 / **5** | 874 / 874 | 6 / **5** |
+| break column | 2 / **2** | 613 / 613 | 2 / **2** |
+
+Word opened every candidate without a repair prompt, agreed with LibreOffice on all
+eight page counts including the column case where the right answer is "no change",
+and reported an identical word count before and after in every pair — an independent
+confirmation of text preservation from the application the user actually opens the
+file in.
+
+**This is not a general claim that the two renderers agree.** They agreed on eight
+synthetic documents. The in-product preview is still LibreOffice, and the preview
+panel still says it approximates Word rather than being Word.
+
+### 15.7 Live model — measured, and it failed
+
+This is the only part of section 15 that is evidence about a model, and the result is
+negative. `gemma4:e2b` was chosen deliberately as the measured historical baseline;
+`gemma4:e4b` is also installed on this machine and was **not** substituted, because a
+loaded model is not a baseline.
+
+`work/session1-demo/live_break_case.py`, record `live-break-cases.json`:
+
+| Case | Latency | Result |
+| --- | --- | --- |
+| `selected` — one break selected, complaint says it is unwanted | 255.6 s | **`invalid_response`**: "missing required key(s): evidence, explanation, operations, source_sha256, status" |
+| `ambiguous` — two breaks, none selected | 157.5 s | **`invalid_response`**, same reason |
+
+A raw capture of what the model actually returned:
+
+```
+{"operation": "remove_break", "break_id": "brk-7925c71d4abd3fc5"}
+```
+
+An invented schema. The required envelope has five keys and the operation is
+`remove_explicit_break` with a `target_id`.
+
+Because this session had enlarged the system prompt by about 1,750 characters to
+describe the new section operation, a **controlled comparison** was run on the same
+case with the prompt restored to its pre-session form. It returned
+`{"operation": "remove_break"}` — the same failure with *less* information. **This
+session's prompt change did not cause it.**
+
+What this does and does not mean. The deterministic slice is unaffected: the
+validator rejected a malformed answer, which is exactly its job, and no candidate was
+built. What it means is that **live Gemma diagnosis of the structural operations does
+not currently work**, and nothing in the submission may claim otherwise. The remedy —
+fine-tuning for envelope conformance, not judgement — is written up as an unfinished
+experiment in `TINKER_NEXT.md`.
+
+The historical **8/10** figure remains attached to its original prompt and capability
+scope (the ten paragraph-property cases, before explicit-break support existed). It
+was not re-run, not relabelled, and is not evidence about break or section handling.
+
+## 16. Final suite run — 21 October 2026
+
+Run module by module after the last code edit, so no count below is summed across
+overlapping runs and no module's result is inferred from another's. Script:
+`work/session2/run_suite.sh`. Log: `work/session2/backend-suite.log`.
+
+| Module | Tests | Time | Result |
+| --- | --- | --- | --- |
+| `test_api` | 57 | 18 s | OK |
+| `test_api_breaks` | 21 | 353 s | 1 failure in this pass — see below |
+| `test_api_noop` | 2 | 2 s | OK |
+| `test_api_observability` | 3 | 3 s | OK |
+| `test_api_render` | 3 | 4 s | OK |
+| `test_api_sections` | 19 | 449 s | OK |
+| `test_diagnosis` | 33 | <1 s | OK |
+| `test_engine` | 23 | <1 s | OK |
+| `test_eval_fixtures` | 11 | 1 s | OK |
+| `test_gemma_adapter` | 59 | 2 s | OK |
+| `test_observability` | 8 | 1 s | OK |
+| `test_observability_breaks` | 10 | 62 s | OK |
+| `test_observability_review` | 1 | 1 s | OK |
+| `test_pipeline` | 26 | 2 s | OK |
+| `test_render` | 10 | 4 s | OK |
+| `test_sections` | 51 | 147 s | OK |
+| `test_structure` | 67 | 102 s | OK |
+| `test_workflow` | 23 | 164 s | OK |
+| **Total** | **427** | ~22 min | 17 of 18 modules clean in this pass |
+
+**The one failure, stated plainly.** `test_api_breaks` failed on
+`test_sections_endpoint_is_read_only`, which asserts the pre-session contract that no
+section is ever editable. That assertion became false when the section-start change
+shipped. The test was rewritten (see section 13) **after** this module had already
+run in the sweep, so the sweep records the old code. `InspectionEndpointTests` was
+re-run immediately after the fix — 7 tests, OK — and the full module was re-run
+afterwards; its result is in `work/session2/test_api_breaks_final.log`.
+
+Earlier in the session the same module was run to completion on the pre-change code:
+21 tests, OK, 912 s (`work/session2/test_api_breaks.log`).
+
+**The re-run after the fix: 22 tests, 519 s, one failure — and it was a different
+one.** The rewritten read-only test passed. What failed was
+`test_rejecting_keeps_the_break_and_offers_no_download`, with the job in state
+`failed` rather than `awaiting_review`:
+`{"error_code":"invalid_state","detail":"Nothing to reject; this job is 'failed'"}`.
+
+That is the designed behaviour of a **renderer timeout**, not a logic fault: a break
+removal is refused review unless both documents render, so a LibreOffice conversion
+that exceeds its timeout produces exactly this. The same signature appeared twice
+earlier in the session, in `test_api_sections.RenderedSectionReviewTests`, both times
+while Ollama or another suite was saturating the CPU, and both times the tests passed
+on a quiet machine. `RenderedBreakReviewTests` was therefore re-run on its own:
+**6 tests, 141.7 s, OK**, including the one that had failed.
+
+This is recorded rather than smoothed over because it is a real property of the
+suite: **the rendered tests are timing-sensitive under CPU contention.** A green run
+is not evidence that they cannot flake, and a red one of this shape should be
+re-run on an idle machine before it is treated as a defect. Log:
+`work/session2/test_api_breaks_final.log`.
+
+**Frontend, same day, after the last edit:** `npm test -- --run` → **34 tests, 2
+files, all passing**; `npm run build` → succeeded, `dist/index.html` plus hashed
+assets, 301.93 kB JS (90.21 kB gzip), 28.84 kB CSS. See
+`frontend/docs/VERIFICATION.md`.
+
+**What these numbers are not.** 427 is the count for this one sweep. It is not added
+to any earlier run's total, and the browser, rendered-demonstration, Word and
+live-model results in sections 12 to 15 are separate evidence of separate kinds,
+counted separately.

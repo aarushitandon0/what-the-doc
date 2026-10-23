@@ -56,16 +56,29 @@ export const getDocument = (documentId, signal) => request(`/api/documents/${id(
 
 export const getParagraphs = (documentId, signal) => request(`/api/documents/${id(documentId)}/paragraphs`, {signal});
 
+/** Explicit page and column breaks, each with the server-issued target id that is
+ * the only thing POST /api/jobs will accept. The ids belong to this source revision:
+ * re-read this rather than keeping one. Identifying a break is not advice to remove it. */
+export const getBreaks = (documentId, signal) => request(`/api/documents/${id(documentId)}/breaks`, {signal});
+
+/** Section boundaries and start types, with a target id for each section and, for
+ *  the ones that qualify, the single supported start-type change. Nothing else
+ *  about a section can be altered. */
+export const getSections = (documentId, signal) => request(`/api/documents/${id(documentId)}/sections`, {signal});
+
 export const getPeers = (documentId, paragraphId, signal) =>
   request(`/api/documents/${id(documentId)}/paragraphs/${id(paragraphId)}/peers`, {signal});
 
-export const createJob = ({documentId, paragraphId, complaint, render = true, expectedSourceSha256, model, timeout}, signal) =>
+export const createJob = ({documentId, paragraphId, complaint, render = true, expectedSourceSha256, model, timeout, breakTargetId, sectionTargetId}, signal) =>
   request('/api/jobs', {
     ...json({
       document_id: documentId,
       paragraph_id: paragraphId,
       complaint,
       render,
+      ...(breakTargetId ? {break_target_id: breakTargetId} : {}),
+      // A break and a section are different repairs; the server refuses both at once.
+      ...(sectionTargetId ? {section_target_id: sectionTargetId} : {}),
       ...(expectedSourceSha256 ? {expected_source_sha256: expectedSourceSha256} : {}),
       ...(model ? {model} : {}),
       ...(timeout ? {timeout} : {}),
@@ -124,7 +137,15 @@ export const ERROR_TEXT = {
   model_timeout: 'The model did not answer in time.',
   unsupported_formatting: 'The paragraph uses formatting the repair engine will not touch.',
   invalid_operation: 'The proposed operation was refused by the validator.',
-  render_failure: 'LibreOffice could not render the preview pages.',
+  render_failure: 'LibreOffice could not render the pages. Removing a page or column break changes the document’s structure, so it is never offered for review without a successful render of both versions.',
+};
+
+/** Human label for one identified break. Two breaks in the same paragraph must never
+ * read the same, so the ordinal and the surrounding text both appear. */
+export const breakLabel = (record) => {
+  if (!record) return '';
+  const kind = record.break_type === 'column' ? 'Column break' : record.break_type === 'page' ? 'Page break' : 'Line break';
+  return `${kind} ${record.ordinal_in_paragraph || 1} in ¶${record.paragraph_id}`;
 };
 
 export const errorText = (error) =>

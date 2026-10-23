@@ -97,9 +97,16 @@ class ObservabilityTests(unittest.TestCase):
         self.assertEqual(result['outcome'], 'awaiting_review')
         event, = self.exported()
         spans = {span['description']: span for span in event['spans']}
-        self.assertEqual(set(spans), {'diagnosis.execute', 'model.inference', 'diagnosis.validate',
+        # structure.inspect covers the break/section inspection that builds the
+        # model's evidence. It runs inside diagnosis.execute, before inference.
+        self.assertEqual(set(spans), {'structure.inspect', 'diagnosis.execute',
+                                     'model.inference', 'diagnosis.validate',
                                      'proposal.validate', 'proposal.prepare', 'candidate.create',
                                      'preservation.check'})
+        self.assertEqual(spans['structure.inspect']['parent_span_id'],
+                         spans['diagnosis.execute']['span_id'])
+        self.assertEqual(spans['candidate.create']['data']['wtd.operation_kind'],
+                         'paragraph_property')
         ai = spans['model.inference']
         self.assertEqual(ai['op'], 'gen_ai.chat')
         self.assertEqual(ai['parent_span_id'], spans['diagnosis.execute']['span_id'])

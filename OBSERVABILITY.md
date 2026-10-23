@@ -41,6 +41,7 @@ separate hash. No document path or environment-variable dump is exported.
 | Transaction/span | What it measures |
 | --- | --- |
 | `repair.execute` | Actual asynchronous worker execution, or one CLI pipeline run |
+| `structure.inspect` | Explicit-break and section inspection: the HTTP inspection endpoints, the break-selection check at job creation, and the evidence built for the prompt |
 | `diagnosis.execute` | Diagnoser call, including the adapter around inference |
 | `model.inference` (`gen_ai.chat`) | Ollama HTTP inference and runtime-envelope extraction |
 | `diagnosis.validate` | Parsing and schema validation of the model diagnosis |
@@ -70,9 +71,30 @@ is `model.inference`. The repair root is a custom `task`, not an asserted autono
 agent invocation. Local AI-span emission does **not** establish that a hosted
 Sentry Agents dashboard accepts or displays this integration.
 
+Two closed-set labels describe the kind of work rather than its content.
+`wtd.operation_kind` is one of `paragraph_property`, `explicit_break_removal`,
+`section_start_change`, `mixed` or `none`, and `wtd.break_type` is `page` or
+`column`. Both are validated against those sets, so an unrecognised value is dropped
+rather than exported and no free-form string can ride out on either key. They label
+work that was already validated elsewhere and grant nothing. `wtd.break_type` is set
+only when every break target in a plan is the same type; a mixed plan leaves it
+absent rather than picking one.
+
+`section_start_change` was added to the closed set alongside the operation itself.
+`wtd.break_type` was deliberately **not** widened to carry a section start type:
+`nextPage` or `continuous` would be a new fact about the user's document rather than
+a label on work the service already validated, and the rule here is that telemetry
+describes the work, never the document. A section change therefore exports its kind
+and its outcome, and nothing about which section or what it was.
+
+A break's `target_id` is **not** exported. It is a digest of the document revision and
+a position rather than content, but it is not in the allowlist either, so it cannot
+be used to correlate telemetry with a particular place in a particular document.
+
 Allowed metadata comprises model identifiers, live/fixture mode, known outcomes and
-error codes, opaque job IDs, the SHA-256 of the actual static system prompt, and an
-aggregate SHA-256 of the current backend implementation files. No invented schema
+error codes, opaque job IDs, the operation kind and break type above, the SHA-256 of
+the actual static system prompt, and an aggregate SHA-256 of the current backend
+implementation files. No invented schema
 version is assigned. Stage durations come from SDK timestamps. Only nonnegative
 integer `prompt_eval_count` / `eval_count` reported by Ollama become
 `gen_ai.usage.input_tokens` / `output_tokens`; total is recorded only when both are
@@ -101,7 +123,11 @@ scopes and restores ambient scopes afterward.
 
 Document/complaint text, full prompts, raw model outputs, filenames, filesystem
 paths, credentials, DOCX/PDF/image attachments and local evaluation snapshots never
-enter the telemetry API. Existing local diagnostic/evaluation artifacts keep their
+enter the telemetry API. The text either side of an identified break is in the same
+category: it is how a person tells two breaks in one paragraph apart, so it exists in
+the HTTP response and in the on-disk job report, and it must never reach telemetry.
+`test_observability_breaks.py` asserts its absence from complete exported envelopes
+using sentinels planted in the fixture document. Existing local diagnostic/evaluation artifacts keep their
 existing behavior; they are not automatically uploaded or attached.
 
 SDK initialization, span entry/exit, transport submission and flush are best effort.
@@ -119,6 +145,15 @@ disabled collection, and missing/configuration/export/span failures. Sensitive
 complaint, model-output, path and exception sentinels are absent from complete
 exported payloads. These tests do not contact Ollama or Sentry.
 
+`test_observability_breaks.py` covers the explicit-break slice against the same
+in-memory transport: that `structure.inspect` is traced as its own stage, that the
+operation kind appears on the stages that have one, that a column break is labelled a
+column break, that a refused target is traced as `invalid_operation`, that an
+unrendered break removal is traced as a `render_failure`, that a rendered removal
+traces every stage with durations, that an unknown operation kind or break type is
+dropped instead of exported, and that no document text, nearby break text, target id
+or path appears in any payload.
+
 `test_api_observability.py` separately exercises the actual asynchronous API worker,
 finite review/download correlation and sensitive request values.
 `test_observability_review.py` seeds global, isolation and current SDK scopes with
@@ -135,6 +170,18 @@ discovered engine bug or a live-model observation. Another test injects a render
 failure and shows `render.original` plus the root retaining `render_failure` without
 exporting the exception message. Full-run counts and browser/live timing evidence
 belong in the latest section of `TEST_RESULTS.md`.
+
+Hosted verification is **still pending after the explicit-break session**. No
+`SENTRY_DSN` is set in this environment, no project DSN or account access exists in
+the workspace, and none was requested: a secret must not be pasted into a working
+session. The remaining requirement is therefore access, not code — the instrumentation
+for the new stages is written and locally verified against real serialized envelopes.
+
+What a hosted check still has to establish, and what no local test can substitute for:
+that the sanitized transaction is accepted and displayed, that `structure.inspect`,
+the model span and the render spans appear with their durations under one trace, that
+review and download transactions correlate by the opaque job id across the
+asynchronous worker boundary, and that nothing beyond the allowlist arrives.
 
 Hosted verification is pending: no usable project DSN/account access was available
 in this workspace. Supply a project DSN and access to that Sentry project's trace

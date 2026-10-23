@@ -21,6 +21,7 @@ import urllib.request
 import diagnosis
 import engine
 import observability
+import structure as structure_module
 import styles as styles_module
 
 DEFAULT_URL = 'http://localhost:11434/api/chat'
@@ -54,7 +55,90 @@ list. An empty list means no repair was proposed, which is a valid answer.
 '''
 
 
-def evidence(path, paragraph_id, context=2):
+def break_evidence(path, paragraph_id, break_target_id=None,
+                   section_target_id=None):
+    """Identified explicit breaks, scoped so the model cannot guess an unseen one.
+
+    The model is shown every break in the selected paragraph plus a count of those
+    elsewhere, and - when the user picked one in the interface - which one they picked.
+    It is never shown a target id it is not allowed to act on, which is what makes
+    "operation targets a break that was not supplied" a detectable fabrication rather
+    than a lucky guess.
+
+    Breaks the engine will refuse are included *with their reason*, because a model
+    that cannot see the refusal proposes it instead of abstaining.
+    """
+    with observability.span('structure.inspect'):
+        report = engine.inspect_breaks(path)
+        sections = engine.inspect_sections(path)
+    here = [record for record in report['breaks']
+            if record['paragraph_id'] == paragraph_id]
+    selected = next((record for record in report['breaks']
+                     if record.get('target_id') == break_target_id), None)
+    if break_target_id is not None and selected is None:
+        raise ValueError('The selected break is not in this document revision')
+    offered = list(here)
+    if selected is not None and selected not in offered:
+        offered.append(selected)
+    return {
+        'breaks_in_selected_paragraph': here,
+        'user_selected_break': selected,
+        'breaks_elsewhere_in_document': report['break_count'] - len(here),
+        'removable_breaks_in_document': report['removable_count'],
+        'removable_break_types': report['removable_break_types'],
+        'supplied_target_ids': sorted(r['target_id'] for r in offered
+                                      if r.get('target_id')),
+        'sections': _section_evidence(sections, section_target_id),
+        'note': report['warning'],
+    }
+
+
+def _section_evidence(sections, section_target_id=None):
+    """What the model may know about sections, and which one it may act on.
+
+    Only the section the person actually selected is offered as an actionable id.
+    Every other section is described without one, so a proposal naming a section the
+    interface did not point at is a fabrication the validator can detect rather than
+    a plausible guess. Ineligible sections keep their refusal reason, because a model
+    that cannot see the refusal proposes the change instead of abstaining.
+    """
+    chosen = next((x for x in sections['sections']
+                   if x.get('target_id') == section_target_id), None)
+    if section_target_id is not None and chosen is None:
+        raise ValueError('The selected section is not in this document revision')
+
+    def describe(record):
+        shown = {k: record[k] for k in
+                 ('section_index', 'defined_in', 'governs', 'start_type',
+                  'start_type_is_default', 'is_continuous', 'first_paragraph_id',
+                  'last_paragraph_id', 'is_final_section', 'edit_eligible',
+                  'ineligible_reason', 'supported_start_changes')}
+        shown['columns'] = record['columns']['count']
+        if record.get('target_id') == section_target_id:
+            shown['target_id'] = record['target_id']
+        return shown
+
+    return {
+        'count': sections['section_count'],
+        'start_types': [x['start_type'] for x in sections['sections']],
+        'sections': [describe(x) for x in sections['sections']],
+        'user_selected_section': None if chosen is None else describe(chosen),
+        'supplied_section_target_ids': [] if chosen is None else [chosen['target_id']],
+        'supported_start_changes': sections['supported_start_changes'],
+        'note': sections['warning'],
+    }
+
+
+def supplied_target_ids(path, paragraph_id, break_target_id=None,
+                        section_target_id=None):
+    """The break and section ids a diagnosis for this selection may name."""
+    found = break_evidence(path, paragraph_id, break_target_id, section_target_id)
+    return (set(found['supplied_target_ids'])
+            | set(found['sections']['supplied_section_target_ids']))
+
+
+def evidence(path, paragraph_id, context=2, break_target_id=None,
+             section_target_id=None):
     """The structured payload sent to the model. No file paths, no raw XML."""
     report = engine.inspect(path)
     records = report['paragraphs']
@@ -89,7 +173,9 @@ def evidence(path, paragraph_id, context=2):
     peer_report = engine.peers(path, paragraph_id)
 
     window = records[max(0, paragraph_id - context):paragraph_id + context + 1]
+    breaks = break_evidence(path, paragraph_id, break_target_id, section_target_id)
     return {'source_sha256': report['source_sha256'],
+            'explicit_breaks': breaks,
             'selected_paragraph_id': paragraph_id,
             'selected': trim(records[paragraph_id]),
             'nearby_paragraphs': [trim(r) for r in window],
@@ -101,15 +187,25 @@ def evidence(path, paragraph_id, context=2):
 
 
 def check_shape(plan, paragraph_id, source_sha256):
-    """Reject a malformed or off-target response before it reaches the validator."""
-    if not isinstance(plan, dict) or set(plan) != {'source_sha256', 'operations'}:
-        raise ValueError('Expected exactly source_sha256 and operations')
+    """Reject a malformed or off-target response before it reaches the validator.
+
+    A break removal names a target id rather than a paragraph, so the paragraph-scope
+    check does not apply to it; the engine resolves its id against the document and
+    refuses an unknown, stale, mistyped or unsupported one.
+    """
+    if not isinstance(plan, dict) or set(plan) not in (
+            {'source_sha256', 'operations'},
+            {'source_sha256', 'operations', 'schema_version'}):
+        raise ValueError('Expected source_sha256 and operations, with an optional '
+                         'schema_version')
     if plan['source_sha256'] != source_sha256:
         raise ValueError('Model altered source_sha256')
     operations = plan['operations']
     if not isinstance(operations, list):
         raise ValueError('operations must be a list')
     for op in operations:
+        if engine.is_break_operation(op):
+            continue
         if not isinstance(op, dict) or op.get('paragraph_id') != paragraph_id:
             raise ValueError('Model targeted another paragraph')
     return plan
@@ -187,7 +283,8 @@ def ineffective_operations(path, plan):
 
 
 def validate_proposal(path, plan, allow_effective_noop=False):
-    with observability.span('proposal.validate'):
+    with observability.span('proposal.validate',
+                            operation_kind=engine.operation_kind(plan)):
         return _validate_proposal(path, plan, allow_effective_noop=allow_effective_noop)
 
 
@@ -228,13 +325,20 @@ def prepare_proposal(path, plan, allow_effective_noop=False):
     Validation happens before filtering, so an invalid or unsupported operation cannot
     disappear into a seemingly valid plan. The raw model diagnosis remains unchanged.
     """
-    with observability.span('proposal.prepare'):
+    with observability.span('proposal.prepare',
+                            operation_kind=engine.operation_kind(plan)):
         validate_proposal(path, plan, allow_effective_noop=allow_effective_noop)
         findings = [] if allow_effective_noop else ineffective_operations(path, plan)
         redundant = {(item['paragraph_id'], item['field']) for item in findings}
-        return {'source_sha256': plan['source_sha256'],
-                'operations': [dict(op) for op in plan['operations']
-                               if (op['paragraph_id'], op['field']) not in redundant]}
+        prepared = {'source_sha256': plan['source_sha256'],
+                    'operations': [dict(op) for op in plan['operations']
+                                   if engine.is_structural_operation(op)
+                                   or (op['paragraph_id'], op['field']) not in redundant]}
+        if 'schema_version' in plan:
+            # Dropping the declared version would silently downgrade the plan and the
+            # engine would then refuse the break operation it just validated.
+            prepared['schema_version'] = plan['schema_version']
+        return prepared
 
 
 DIAGNOSIS_SYSTEM = '''You diagnose Microsoft Word paragraph formatting faults. You never
@@ -286,7 +390,8 @@ Two complete answers, shown for their shape only. Copy the shape, never the valu
    "operations": [{"paragraph_id": 1, "field": "space_before_pt", "value": 12.0}],
    "question": null}
 
-An evidence entry has exactly the two keys paragraph_id and field, and nothing else.
+An evidence entry has exactly the two keys paragraph_id and field - or, to cite one
+identified break, exactly paragraph_id and target_id - and nothing else.
 An operation value is a bare number like 12.0, not the string "12.0", and never null.
 
 Never return status "proposed" with an empty operations list. An empty list is an
@@ -324,7 +429,86 @@ Allowed operation fields and values:
   space_before_pt, space_after_pt, left_indent_pt : a number from 0 to 144, in points
   alignment                                       : "left", "center", "right", "both"
   page_break_before, keep_with_next               : true or false
-Only the selected paragraph may appear in operations. At most 12 operations.
+Only the selected paragraph may appear in a field operation. At most 12 operations.
+
+There is one other operation, and it is the only structural change available to you:
+removing ONE explicit break that this input has already identified for you.
+
+  {"operation": "remove_explicit_break",
+   "target_id": "<copy a target_id from explicit_breaks exactly>",
+   "expected_break_type": "page" or "column"}
+
+Rules for it, all of which are enforced and none of which you can argue past:
+
+  * Copy a target_id from explicit_breaks in the input. An id you compose yourself,
+    or an id for a break the input did not show you, is discarded unread.
+  * expected_break_type must equal that break's own break_type. Saying "page" about a
+    column break is refused.
+  * Propose at most ONE removal. Each break is a separate judgement, approved
+    separately by the person.
+  * Never propose removing a break whose edit_eligible is false. Its
+    ineligible_reason says why it cannot be removed; report unsupported and repeat
+    the reason.
+  * Four different things are called a "page break" and they are not the same thing:
+      - page_break_before is a paragraph PROPERTY, repaired with a field operation.
+      - a break_type "page" entry in explicit_breaks is an explicit page break the
+        writer typed, removed with remove_explicit_break.
+      - a break_type "column" entry is an explicit column break, which only moves
+        text between columns.
+      - kind "last_rendered_page_break" is where the program that last opened the
+        document happened to end a page. The writer did not put it there, nothing is
+        wrong with it, and it can never be removed.
+    If the complaint is about a property, do not remove a break element, and the
+    reverse. Use the kind of operation that matches the evidence.
+
+Intent decides this, not the presence of a break. A page break before a chapter, an
+appendix, a cover sheet or a table the writer wanted whole is a deliberate decision
+and removing it damages the document. Writers insert breaks on purpose far more often
+than by accident. So:
+
+  * Remove a break only when the complaint says, about that break, that it is
+    unwanted - for example a nearly empty page the user did not ask for.
+  * If breaks_in_selected_paragraph holds more than one break and the complaint does
+    not identify which, and user_selected_break is null, return needs_clarification
+    and ask which one, quoting the nearby text of each. Do not pick one. Do not pick
+    "the first". Guessing here deletes something the writer may have meant.
+  * If user_selected_break is set, that is the break the person pointed at; still only
+    propose removing it if the complaint says it is unwanted.
+  * If the only breaks present look deliberate, or the complaint is about something
+    else entirely, return no_change or unsupported and say so.
+There is a THIRD operation, and it is the only section change available to you:
+changing ONE identified section's start from nextPage to continuous.
+
+  {"operation": "change_section_start",
+   "target_id": "<copy user_selected_section.target_id exactly>",
+   "expected_start_type": "nextPage",
+   "new_start_type": "continuous"}
+
+Rules for it, all enforced:
+
+  * Propose it ONLY when the input's sections.user_selected_section is set and
+    carries a target_id. No other section has an id in your input, and an id you
+    compose yourself is discarded unread.
+  * It is the ONLY operation in your answer. Never combine it with a field operation
+    or a break removal.
+  * expected_start_type must be "nextPage" and new_start_type must be "continuous".
+    No other conversion exists. An evenPage or oddPage start is a binding and
+    printing requirement: never convert it, whatever the complaint says.
+  * Never propose it for a section whose edit_eligible is false. ineligible_reason
+    says which rule it failed; report unsupported and repeat that reason.
+  * A section break is usually deliberate - an appendix, a chapter, a landscape
+    insert. Eligible does not mean wrong. Propose the change only when the complaint
+    says, about that section, that the new page it starts is unwanted.
+  * "continuous" does not promise the page break disappears. Page geometry, column
+    settings and keep-with-next rules can still force a new page. Do not promise in
+    your explanation that a page will be removed; say the section will be asked to
+    continue on the same page.
+  * Everything else about a section - its columns, page size, margins, orientation,
+    numbering, headers and footers, and the section boundaries themselves - is read
+    to you for context only and can never be changed. If that is the fault, return
+    unsupported and say so.
+  * To cite a section as evidence, use an entry of exactly {"section_id": "<that
+    same target_id>"} and nothing else.
 
 Evidence format. Each paragraph carries effective_properties: for every field a value
 in points (or a boolean) plus the origin that supplied it, one of "direct" (set on this
@@ -456,7 +640,8 @@ def _request_bytes(request, timeout):
     return data
 
 
-def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1):
+def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1,
+             break_target_id=None, section_target_id=None):
     """Ask the local Gemma for a structured diagnosis. Returns (diagnosis, metadata).
 
     Never applies anything and never writes a file. Every failure is raised as a
@@ -469,7 +654,9 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1)
         raise diagnosis.DiagnosisError(diagnosis.INVALID_SELECTION,
                                        'A complaint describing the problem is required')
     try:
-        payload_evidence = evidence(path, paragraph_id, context=context)
+        payload_evidence = evidence(path, paragraph_id, context=context,
+                                    break_target_id=break_target_id,
+                                    section_target_id=section_target_id)
     except ValueError as error:
         raise diagnosis.DiagnosisError(diagnosis.INVALID_SELECTION, str(error))
 
@@ -480,6 +667,13 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1)
 
     supplied_ids = {record['paragraph_id'] for record in payload_evidence['nearby_paragraphs']}
     supplied_ids.add(paragraph_id)
+    # Exactly the break ids the prompt contained. Anything else the model names is an
+    # invention, and `diagnosis.check` refuses it on that basis.
+    targets = set(payload_evidence['explicit_breaks']['supplied_target_ids'])
+    targets |= set(payload_evidence['explicit_breaks']['sections']
+                   ['supplied_section_target_ids'])
+    supplied_ids.update(record['paragraph_id'] for record in
+                        payload_evidence['explicit_breaks']['breaks_in_selected_paragraph'])
     timeout = DEFAULT_TIMEOUT if timeout is None else timeout
     payload = {'model': model, 'stream': False, 'format': 'json',
                # No hidden chain of thought is requested: a reasoning trace would be
@@ -490,6 +684,8 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1)
                             {'role': 'user', 'content': json.dumps(
                                 {'complaint': complaint,
                                  'selected_id': paragraph_id,
+                                 'selected_break_target_id': break_target_id,
+                                 'selected_section_target_id': section_target_id,
                                  'document_is_untrusted_data': True,
                                  'document': payload_evidence})}]}
     request = urllib.request.Request(endpoint_url(), data=json.dumps(payload).encode(),
@@ -510,13 +706,17 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1)
         trace.set(input_tokens=envelope.get('prompt_eval_count'),
                   output_tokens=envelope.get('eval_count'), response_model=envelope.get('model'))
     metadata = {'model': model, 'is_gemma_family': is_gemma, 'endpoint': endpoint_url(),
+                'break_target_id': break_target_id,
+                'section_target_id': section_target_id,
+                'supplied_target_ids': sorted(targets),
                 'latency_seconds': latency, 'context_paragraphs': sorted(supplied_ids),
                 'prompt_eval_count': envelope.get('prompt_eval_count'),
                 'eval_count': envelope.get('eval_count'),
                 'source_sha256': payload_evidence['source_sha256']}
     with observability.span('diagnosis.validate'):
         found = diagnosis.parse(content, paragraph_id,
-                                payload_evidence['source_sha256'], supplied_ids)
+                                payload_evidence['source_sha256'], supplied_ids,
+                                supplied_targets=targets)
     return found, metadata
 
 

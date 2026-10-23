@@ -206,6 +206,18 @@ def _public_job(job):
                     'renderer_available': (report.get('renderer') or {}).get('available'),
                     'note': 'Rendered by LibreOffice. It approximates Word; it is not Word.'},
         'visual_comparison': report.get('visual_comparison'),
+        'operation_kind': report.get('operation_kind'),
+        'plan_schema_version': report.get('plan_schema_version'),
+        'break_target_id': job.get('break_target_id'),
+        # Which break is being removed, with the text either side of it, so a reviewer
+        # can see the actual target rather than an id.
+        'break_targets': report.get('break_targets'),
+        'section_target_id': job.get('section_target_id'),
+        # Which section is being changed, with its boundaries and what it governs, so
+        # a reviewer sees the actual section rather than an id.
+        'section_targets': report.get('section_targets'),
+        'rendering_required': report.get('rendering_required'),
+        'rendering_satisfied': report.get('rendering_satisfied'),
         'candidate': None,
         'invariants': report.get('invariants'),
         'invariant_failures': report.get('invariant_failures'),
@@ -287,6 +299,7 @@ def _revalidate_candidate(job, stage='review.integrity'):
 def _trace_metadata(job):
     metadata = (job.get('report') or {}).get('diagnosis_metadata') or {}
     return {'job_id': job['job_id'], 'mode': job['mode'],
+            'operation_kind': (job.get('report') or {}).get('operation_kind'),
             'model': ('injected-fixture' if job['mode'] == FIXTURE else
                       metadata.get('model') or job['model'] or os.environ.get('GEMMA_MODEL'))}
 
@@ -487,6 +500,34 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
         except ValueError as error:
             raise ApiError(404, diagnosis.INVALID_SELECTION, str(error))
 
+    @app.get('/api/documents/{document_id}/breaks')
+    def get_breaks(document_id: str = PathParam(...)):
+        """Explicit page and column breaks, each with a target id and its eligibility.
+
+        Read-only. The ids here are the only ones POST /api/jobs and the engine will
+        accept, and they are issued for this source revision: re-read this endpoint
+        rather than reusing an id from an earlier revision of the same document.
+        Identifying a break is not a recommendation to remove it.
+        """
+        _document(document_id)
+        with observability.span('structure.inspect'):
+            return engine.inspect_breaks(store.document_path(document_id))
+
+    @app.get('/api/documents/{document_id}/sections')
+    def get_sections(document_id: str = PathParam(...)):
+        """Section boundaries, start types, and which sections may be converted.
+
+        Exactly one conversion exists: a supported `nextPage` start may become
+        `continuous`. Every section carries a revision-bound `target_id`, and every
+        section that cannot be converted carries the rule it failed. The ids here are
+        the only ones POST /api/jobs and the engine accept, and they are issued for
+        this source revision: re-read this endpoint rather than reusing an older id.
+        Eligibility is not a recommendation - a section break is usually deliberate.
+        """
+        _document(document_id)
+        with observability.span('structure.inspect'):
+            return engine.inspect_sections(store.document_path(document_id))
+
     # -- jobs ---------------------------------------------------------------
     def _execute_job(job_id):
         job = store.jobs[job_id]
@@ -497,7 +538,9 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
                 job['source_path'], job['paragraph_id'], job['complaint'],
                 store.job_dir(job_id), diagnoser=job.pop('_diagnoser', None),
                 mode=job['mode'], do_render=job['render'],
-                model=job['model'], timeout=job['timeout'])
+                model=job['model'], timeout=job['timeout'],
+                break_target_id=job.get('break_target_id'),
+                section_target_id=job.get('section_target_id'))
         except Exception as error:                     # pragma: no cover - defensive
             job['state'] = FAILED
             job['report'] = {'outcome': pipeline.FAILED,
@@ -564,6 +607,56 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             raise ApiError(409, INVALID_STATE,
                            'expected_source_sha256 does not match this document')
 
+        # Optional: the break the person pointed at in the interface. It is checked
+        # against this document's current breaks here, so a stale or invented id is
+        # refused before a model is called rather than after.
+        break_target_id = payload.get('break_target_id')
+        if break_target_id is not None and payload.get('section_target_id') is not None:
+            raise ApiError(400, diagnosis.INVALID_SELECTION,
+                           'Select a break or a section, not both: they are different '
+                           'repairs and are approved separately.')
+        if break_target_id is not None:
+            if not isinstance(break_target_id, str):
+                raise ApiError(400, diagnosis.INVALID_SELECTION,
+                               'break_target_id must be a string')
+            with observability.span('structure.inspect'):
+                found = engine.inspect_breaks(store.document_path(document_id))
+            selected = next((b for b in found['breaks']
+                             if b.get('target_id') == break_target_id), None)
+            if selected is None:
+                raise ApiError(409, INVALID_STATE,
+                               'break_target_id does not match any break in this '
+                               'document revision. Re-read GET /breaks.')
+            if not selected['edit_eligible']:
+                raise ApiError(400, diagnosis.UNSUPPORTED_FORMATTING,
+                               selected['ineligible_reason'])
+            if selected['paragraph_id'] != paragraph_id:
+                raise ApiError(400, diagnosis.INVALID_SELECTION,
+                               'That break is in paragraph %d, not the selected '
+                               'paragraph %d' % (selected['paragraph_id'], paragraph_id))
+
+        # Optional: the section the person pointed at. Checked against this
+        # document's current sections here, so a stale, ineligible or invented id is
+        # refused before a model is called rather than after. A section and a break
+        # are different things and cannot both be the subject of one complaint.
+        section_target_id = payload.get('section_target_id')
+        if section_target_id is not None:
+            if not isinstance(section_target_id, str):
+                raise ApiError(400, diagnosis.INVALID_SELECTION,
+                               'section_target_id must be a string')
+            with observability.span('structure.inspect'):
+                found_sections = engine.inspect_sections(
+                    store.document_path(document_id))
+            chosen = next((x for x in found_sections['sections']
+                           if x.get('target_id') == section_target_id), None)
+            if chosen is None:
+                raise ApiError(409, INVALID_STATE,
+                               'section_target_id does not match any section in this '
+                               'document revision. Re-read GET /sections.')
+            if not chosen['edit_eligible']:
+                raise ApiError(400, diagnosis.UNSUPPORTED_FORMATTING,
+                               chosen['ineligible_reason'])
+
         fixture = payload.get('fixture_diagnosis')
         diagnoser, mode = None, LIVE
         if fixture is not None:
@@ -571,8 +664,10 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
                 raise ApiError(403, FIXTURE_MODE_DISABLED,
                                'Injected diagnoses are refused. Start the server with '
                                '--allow-fixture-mode to use them in development.')
-            diagnoser, mode = _fixture_diagnoser(fixture, paragraph_id,
-                                                 record['source_sha256']), FIXTURE
+            diagnoser, mode = _fixture_diagnoser(
+                fixture, paragraph_id, record['source_sha256'],
+                store.document_path(document_id), break_target_id,
+                section_target_id), FIXTURE
         else:
             runtime = gemma_adapter.runtime_status()
             if not (runtime['available'] and runtime.get('model_installed')):
@@ -589,6 +684,8 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             'mode': mode, 'state': QUEUED,
             'render': bool(payload.get('render', True)),
             'model': payload.get('model'), 'timeout': payload.get('timeout'),
+            'break_target_id': break_target_id,
+            'section_target_id': section_target_id,
             'created_at': time.time(), 'updated_at': time.time(),
             'report': None, 'preview_index': None, 'decision': None,
             '_diagnoser': diagnoser,
@@ -668,6 +765,13 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
         if supplied != expected:
             raise ApiError(409, INVALID_STATE,
                            'candidate_sha256 must match the candidate under review')
+        # Enforced here as well as in the pipeline, because "the button was disabled"
+        # is not a rule. A structural change is not acceptable without both renderings.
+        report = job['report'] or {}
+        if report.get('rendering_required') and not report.get('rendering_satisfied'):
+            raise ApiError(409, diagnosis.RENDER_FAILURE,
+                           'An explicit-break removal cannot be accepted without a '
+                           'successful rendering of the original and the candidate.')
         failures = _revalidate_candidate(job)
         if failures:
             log.info('acceptance refused id=%s failures=%d', job_id, len(failures))
@@ -708,6 +812,11 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             raise ApiError(409, INVALID_STATE,
                            'Only an accepted candidate can be downloaded; this job is '
                            '%r. Completing a job is not accepting it.' % job['state'])
+        report = job['report'] or {}
+        if report.get('rendering_required') and not report.get('rendering_satisfied'):
+            raise ApiError(409, diagnosis.RENDER_FAILURE,
+                           'This candidate contains a structural change that was never '
+                           'rendered for review; it will not be served.')
         failures = _revalidate_candidate(job, stage='download.integrity')
         if failures:
             log.info('download refused id=%s failures=%d', job_id, len(failures))
@@ -723,7 +832,8 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
     return app
 
 
-def _fixture_diagnoser(fixture, paragraph_id, source_sha256):
+def _fixture_diagnoser(fixture, paragraph_id, source_sha256, source_path=None,
+                       break_target_id=None, section_target_id=None):
     """Turn an injected answer into a diagnoser, validating it exactly like a model's.
 
     The injection point is the one `pipeline.run` already has for tests. It does not
@@ -733,9 +843,20 @@ def _fixture_diagnoser(fixture, paragraph_id, source_sha256):
     """
     if not isinstance(fixture, dict):
         raise ApiError(400, diagnosis.INVALID_RESPONSE, 'fixture_diagnosis must be an object')
+    # A break id in an injected answer is checked against the document exactly as a
+    # model's would be: an injected diagnosis has a different origin, never more power.
+    targets = ()
+    if source_path is not None:
+        try:
+            targets = gemma_adapter.supplied_target_ids(source_path, paragraph_id,
+                                                        break_target_id,
+                                                        section_target_id)
+        except Exception:                              # pragma: no cover - defensive
+            targets = ()
     try:
         found = diagnosis.check(fixture, paragraph_id, source_sha256,
-                                supplied_ids=_citable_ids(fixture))
+                                supplied_ids=_citable_ids(fixture),
+                                supplied_targets=targets)
     except diagnosis.DiagnosisError as error:
         raise ApiError(400, error.code, error.message)
 

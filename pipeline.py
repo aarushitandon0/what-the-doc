@@ -56,20 +56,24 @@ def _validate_plan(source, plan):
 
 
 def run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
-        do_render=True, model=None, timeout=None, context=1):
+        do_render=True, model=None, timeout=None, context=1, break_target_id=None,
+        section_target_id=None):
     """Trace one finite repair; the API worker's enclosing trace is reused."""
     with observability.transaction('repair.execute',
                                    mode=FIXTURE if diagnoser is not None else mode,
                                    model=model) as trace:
         report = _run(source, paragraph_id, complaint, work_dir, diagnoser=diagnoser,
                       mode=mode, do_render=do_render, model=model, timeout=timeout,
-                      context=context)
-        trace.set(outcome=report['outcome'], error_code=report.get('error_code'))
+                      context=context, break_target_id=break_target_id,
+                      section_target_id=section_target_id)
+        trace.set(outcome=report['outcome'], error_code=report.get('error_code'),
+                  operation_kind=report.get('operation_kind'))
         return report
 
 
 def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
-         do_render=True, model=None, timeout=None, context=1):
+         do_render=True, model=None, timeout=None, context=1, break_target_id=None,
+         section_target_id=None):
     """Diagnose one complaint and, if a repair is proposed, build a candidate to review.
 
     `diagnoser` is the injection point for deterministic tests: a callable
@@ -82,7 +86,9 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
     if diagnoser is None:
         def diagnoser(path, text, selected):
             return gemma_adapter.diagnose(path, text, selected, model=model,
-                                          timeout=timeout, context=context)
+                                          timeout=timeout, context=context,
+                                          break_target_id=break_target_id,
+                                          section_target_id=section_target_id)
     else:
         mode = FIXTURE
 
@@ -92,6 +98,15 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
         'source': str(source),
         'source_sha256': source_hash,
         'paragraph_id': paragraph_id,
+        # The break the person pointed at, when they pointed at one. A diagnosis is
+        # still free to abstain, and an unselected ambiguous paragraph is expected to
+        # produce needs_clarification rather than a guess.
+        'break_target_id': break_target_id,
+        # The section the person pointed at, when they pointed at one. Separate from
+        # break_target_id because they identify different things, and a complaint is
+        # about one of them at a time.
+        'section_target_id': section_target_id,
+        'operation_kind': None,
         # The user's own complaint is recorded because the result cannot be read
         # without it. Document text is not: the diagnosis cites ids and fields.
         'complaint': complaint,
@@ -171,6 +186,12 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
     except ValueError as error:
         return fail(diagnosis.INVALID_OPERATION, str(error))
 
+    report['operation_kind'] = repair_report.get('operation_kind')
+    report['plan_schema_version'] = repair_report.get('plan_schema_version')
+    report['break_targets'] = repair_report.get('break_targets')
+    report['section_targets'] = repair_report.get('section_targets')
+    report['rendering_required'] = repair_report.get('rendering_required')
+    report['rendering_satisfied'] = repair_report.get('rendering_satisfied')
     report['candidate'] = repair_report['candidate']
     report['candidate_sha256'] = repair_report['candidate_sha256']
     report['candidate_reused'] = repair_report['candidate_reused']
@@ -188,9 +209,15 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
     stage('candidate_built')
 
     if repair_report['invariant_failures']:
+        failures = repair_report['invariant_failures']
+        if failures == ['rendering_required']:
+            # A missing rendering is a renderer problem, not a bad operation, and the
+            # code says so. The candidate exists but is not offered for review.
+            return fail(diagnosis.RENDER_FAILURE,
+                        repair_report.get('render_requirement_failure')
+                        or 'rendering is required for this operation')
         return fail(diagnosis.INVALID_OPERATION,
-                    'preservation invariants failed: '
-                    + ', '.join(repair_report['invariant_failures']))
+                    'preservation invariants failed: ' + ', '.join(failures))
 
     report['outcome'] = AWAITING_REVIEW
     report['note'] = ('A candidate exists for review. It is not accepted: open it in '
@@ -206,6 +233,32 @@ def _finish(report, work_dir):
     return report
 
 
+def _cited(entry):
+    """One evidence entry as text, for each of the three shapes it can have.
+
+    A paragraph-property citation names a paragraph and a field; a break citation
+    names a paragraph and a server-issued break id; a section citation names only a
+    section id, because the final body sectPr is not inside any paragraph.
+    """
+    if 'section_id' in entry:
+        return 'section %s' % entry['section_id']
+    if 'target_id' in entry:
+        return 'p%s.break %s' % (entry.get('paragraph_id'), entry['target_id'])
+    return 'p%s.%s' % (entry.get('paragraph_id'), entry.get('field'))
+
+
+def _proposed(op):
+    """One operation as text, for each of the three operation shapes."""
+    if op.get('operation') == engine.CHANGE_SECTION_START:
+        return ('section %s start %s -> %s'
+                % (op['target_id'], op['expected_start_type'], op['new_start_type']))
+    if op.get('operation') == engine.REMOVE_BREAK:
+        return ('remove the %s break %s'
+                % (op['expected_break_type'], op['target_id']))
+    return 'paragraph %s %s -> %r' % (op.get('paragraph_id'), op.get('field'),
+                                      op.get('value'))
+
+
 def _summary(report):
     lines = ['mode:     %s' % report['mode'],
              'outcome:  %s' % report['outcome']]
@@ -216,11 +269,9 @@ def _summary(report):
         if found['question']:
             lines.append('asks:     %s' % found['question'])
         if found['evidence']:
-            lines.append('evidence: ' + ', '.join('p%d.%s' % (e['paragraph_id'], e['field'])
-                                                  for e in found['evidence']))
+            lines.append('evidence: ' + ', '.join(_cited(e) for e in found['evidence']))
         for op in found['operations']:
-            lines.append('proposes: paragraph %d %s -> %r'
-                         % (op['paragraph_id'], op['field'], op['value']))
+            lines.append('proposes: ' + _proposed(op))
     if report['error_code']:
         lines.append('error:    [%s] %s' % (report['error_code'], report['error']))
     metadata = report['diagnosis_metadata'] or {}

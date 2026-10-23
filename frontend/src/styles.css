@@ -34,3 +34,27 @@
 .error svg{width:15px;margin-right:6px}
 .error .text-button{margin-left:10px;text-decoration:underline;color:inherit}
 .workspace-toolbar small{color:#5d6b63;margin-left:10px}
+
+/* Explicit-break selection and structural review. Same apricot/forest palette as the
+   rest of the workshop: a break row is a quiet card, a blocked one is visibly inert,
+   and the selected one uses the same solid apricot the outline already uses. */
+.break-panel{margin:1rem 0;padding:.9rem;border:1px solid var(--line,#e4dccb);border-radius:14px;background:var(--cream,#fff7e9)}
+.break-panel>.eyebrow{display:block;margin-bottom:.5rem}
+.break-list,.section-list{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;gap:.5rem}
+.break-item>button{width:100%;text-align:left;display:flex;flex-direction:column;gap:.35rem;padding:.6rem .7rem;border:1px solid var(--line,#e4dccb);border-radius:11px;background:#fff;cursor:pointer;font:inherit;color:inherit}
+.break-item>button:hover:not(:disabled){border-color:var(--apricot,#ff8739)}
+.break-item>button:focus-visible{outline:3px solid var(--forest,#143b2f);outline-offset:2px}
+.break-item.selected>button{border-color:var(--apricot,#ff8739);background:#fff1e4;box-shadow:inset 0 0 0 1px var(--apricot,#ff8739)}
+.break-item.blocked>button{cursor:not-allowed;opacity:.72;background:#f6f1e6}
+.break-head{display:flex;align-items:center;justify-content:space-between;gap:.5rem}
+.break-head strong{font-size:.95rem}
+.break-context{display:block;font-size:.8rem;line-height:1.45;color:#4a5750}
+.break-context i{font-style:italic}
+.break-context em{display:inline-block;margin:0 .35rem;padding:0 .35rem;border-radius:6px;background:var(--apricot,#ff8739);color:#13221d;font-style:normal;font-weight:700;font-size:.72rem;letter-spacing:.04em}
+.break-reason{display:block;font-size:.76rem;color:#8a4a2d}
+.break-target{display:flex;flex-direction:column;gap:.35rem;padding:.6rem .7rem;border-radius:11px;background:#fff;border:1px solid var(--line,#e4dccb)}
+.break-target small{font-size:.76rem;color:#4a5750}
+.section-list li{padding:.5rem .7rem;border-radius:11px;background:#fff;border:1px solid var(--line,#e4dccb)}
+.section-list strong{display:block;font-size:.85rem}
+.section-list small{display:block;font-size:.75rem;color:#4a5750}
+.page-delta{margin:.75rem 0;padding:.7rem .85rem;border-radius:12px;background:#dde9cf;font-size:.86rem;line-height:1.5}

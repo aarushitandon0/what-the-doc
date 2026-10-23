@@ -4,11 +4,39 @@ Point at the formatting problem. Get a targeted, reviewable repair.
 
 ## Current status
 
-Four engineering milestones are in place: a constrained DOCX inspection and patching
+Five engineering milestones are in place: a constrained DOCX inspection and patching
 core; effective paragraph-style resolution with a before/after rendering workflow; a
 live local Gemma diagnosis layer that turns a plain-language complaint into a
-validated, previewable proposal; and a local HTTP adapter over that pipeline for a
-frontend to drive.
+validated, previewable proposal; a local HTTP adapter over that pipeline for a
+frontend to drive; removal of one identified explicit page or column break; and
+changing one supported next-page **section start** to continuous, with full
+structural inspection of breaks and sections behind both.
+
+Three kinds of repair now exist and they are not interchangeable. Six **paragraph
+properties** can be written (spacing, indent, alignment, `page_break_before`,
+`keep_with_next`). One **explicit break element** — a `w:br` of type `page` or
+`column` that a writer typed into a run — can be deleted, one per diagnosis, named
+only by a server-issued target id and never by XML, an XPath or an index. One
+**section start** of type `nextPage` can become `continuous`, on its own, never
+combined with another operation, and only when the section qualifies. A
+`page_break_before` paragraph property, an explicit page-break element and a
+section start are three different things with three different repairs, and
+`w:lastRenderedPageBreak` is a fourth: it is written by whichever application last
+paginated the file and is never removable.
+
+Everything else about a section is **inspected and never changed** — no section is
+created, merged, split or deleted, and no column layout, page size, margin,
+orientation, numbering, header or footer is altered. Making a section continuous
+does **not** promise that a visible page break disappears: page geometry and other
+settings can still force pagination, and the service reports the real before and
+after page counts rather than claiming a reduction. `CAPABILITIES.md` is the single
+page that states what is repairable, what is only detectable, and what is not
+supported at all — read it before trusting a claim made anywhere else.
+
+New in this session, and the fastest way to try any of it: **[START_HERE.md](START_HERE.md)**
+for a five-minute local start, **[TEST_IT_YOURSELF.md](TEST_IT_YOURSELF.md)** with
+nine prepared documents in **[test-documents/](test-documents/)**, and
+**[DEPLOYMENT.md](DEPLOYMENT.md)** for what can and cannot be deployed today.
 
 The React interface is in `frontend/` and connects to the local API for upload,
 diagnosis, preview, explicit acceptance and download. Real Chromium verification and
@@ -43,8 +71,9 @@ call and none depend on.
 
 | file | what it does |
 | --- | --- |
-| `engine.py` | The constrained DOCX patcher and the `inspect` / `peers` / `apply` CLI. Only `word/document.xml` is ever rewritten; every other ZIP member keeps its original bytes. |
+| `engine.py` | The constrained DOCX patcher and the `inspect` / `peers` / `breaks` / `sections` / `apply` CLI. Only `word/document.xml` is ever rewritten; every other ZIP member keeps its original bytes. |
 | `styles.py` | Effective paragraph-property resolution through `docDefaults`, the `w:basedOn` style chain and direct formatting, labelling the layer that supplied each value. |
+| `structure.py` | Read-only structural inspection: explicit `w:br` page/column breaks with server-issued target ids and derived edit eligibility, and section boundaries and start types. Mints no permission and changes nothing. |
 | `workflow.py` | The before/after run: patch a copy, render both, compare pages, re-check the preservation invariants against the files on disk, stop at `awaiting_review`. |
 | `render.py` | DOCX → PDF → page images through headless LibreOffice in a throwaway profile, plus the page-level visual comparison. |
 
@@ -69,6 +98,7 @@ call and none depend on.
 | --- | --- |
 | `fixtures.py` | Builds the Word-openable four-page sample carrying three labelled faults, each recording the repair a correct diagnosis should reach. |
 | `eval_fixtures.py` | The second sample, carrying the cases a *diagnosis* must get right — including the ones it should decline. |
+| `break_fixtures.py` | Real packages carrying **explicit** run breaks: one with manual page breaks (two in a single paragraph, plus unsupported contexts and a line break), one genuinely two-column document with a manual column break, and one two-section document for section inspection. Kept separate from `fixtures.py` because a `page_break_before` property document is not evidence about an explicit break. |
 | `demo.py` | The Milestone B walkthrough: evidence, the single expected repair, before/after render, and what changed. |
 | `live_eval.py` | The ten-case live grading run. Deliberately not a unittest module, because the deterministic suite must pass with no model installed. |
 | `word_check.py`, `word_check.ps1` | Optional, Windows-only cross-check of the resolver against Microsoft Word's own effective formatting. |
@@ -89,6 +119,9 @@ live measurements are separate commands, and their results are recorded as such.
 | `test_api_render.py` | Renderer failures staying failed jobs rather than becoming approvable repairs. |
 | `test_observability.py`, `test_api_observability.py`, `test_observability_review.py` | Real SDK envelopes captured by a test transport, checked for span shape and for the absence of document content. |
 | `test_eval_fixtures.py` | That the evaluation's cases really are the situations its manifest claims. |
+| `test_structure.py` | Break and section inspection, target identity and staleness, the removal itself, the narrowed invariants, and rendered page-break and column-break demonstrations. |
+| `test_api_breaks.py` | The two inspection endpoints, break selection and its refusals, and the server-side rendering requirement at review, acceptance and download. |
+| `test_observability_breaks.py` | That the new stages are traced with the operation kind, and that break text, target ids and paths never reach a telemetry payload. |
 
 ### The interface
 
@@ -105,6 +138,7 @@ live measurements are separate commands, and their results are recorded as such.
 | file | what it is for |
 | --- | --- |
 | `README.md` | This file: what exists, how to run it, and what it does and does not promise. |
+| `CAPABILITIES.md` | The one page that separates shipped paragraph repairs, shipped explicit-break removal, read-only section inspection, and what is not supported. Detection is not repair. |
 | `API.md` | The complete HTTP contract: requests, responses, the state table and the full frontend flow. |
 | `OBSERVABILITY.md` | Sentry configuration, the span map, the privacy rules and what hosted verification is still missing. |
 | `TEST_RESULTS.md` | What each run actually established, live results kept apart from deterministic ones. |
@@ -275,8 +309,26 @@ would defeat it — `beforeAutospacing`, `afterAutospacing`, `beforeLines`, `aft
 or character-unit indentation — because writing a value that the layout then ignores
 would look like a successful repair and change nothing.
 
-Numbered list geometry, tables, headers, footers, text boxes and explicit run-level
-page breaks are not editable through this prototype.
+Numbered list geometry, tables, headers, footers and text boxes are not editable
+through this prototype.
+
+One structural operation also exists: **removing a single explicit break element**, a
+`w:br` whose `w:type` is `page` or `column`, inside a run that is a direct child of a
+top-level body paragraph. It is named only by a server-issued target id bound to the
+source revision and the expected break type; at most one removal is proposed per
+diagnosis; and only that one element is deleted, with the run, its properties, the
+text either side and every other break left as they were. A successful render of both
+the original and the candidate is required before it can be reviewed, accepted or
+downloaded, and that requirement is enforced in the server rather than in one
+interface.
+
+Breaks in a table cell, text box, hyperlink or other wrapper are *reported* with the
+element that disqualifies them and refused. Line breaks and `w:lastRenderedPageBreak`
+are never removable. Of a section, only a supported `nextPage` start type can be
+changed, and only to `continuous`: no column layout, geometry, numbering, header,
+footer or section boundary can be changed, and the first section of a document is
+never eligible because its start type describes a relationship to a previous section
+that does not exist. `CAPABILITIES.md` has the full table.
 
 ## Live Gemma diagnosis
 
@@ -495,9 +547,11 @@ placed in this tree.
 
 ## Limits
 
-Input cap 20 MiB; expanded ZIP cap 80 MiB; 2000 entries; 12 changes per plan.
-Rejects tracked changes/content controls, signed packages, VBA, duplicate ZIP entries,
-invalid targets and stale hashes. These are initial guards, not a complete upload
+Input cap 20 MiB; expanded ZIP cap 80 MiB; 2000 entries; 12 changes per plan, of which
+at most one may be an explicit-break removal. Rejects tracked changes/content
+controls, signed packages, VBA, duplicate ZIP entries, invalid targets and stale
+hashes. A plan declares `schema_version: 2` to carry a break removal; a plan with no
+version is read as 1 and keeps validating exactly as before. These are initial guards, not a complete upload
 security boundary. Public uploads need isolated conversion workers, timeouts, rate
 limits, relationship checks and authentication before deployment.
 
@@ -521,10 +575,35 @@ The deterministic no-op guard is separate from raw model quality. It prevents an
 ineffective proposal from becoming a reviewable repair without changing the model's
 recorded answer or relabelling the historical evaluation as improved.
 
-Next: verify sanitized traces in a configured hosted Sentry project and expand browser
-coverage to other engines and assistive technology. Then exercise the workflow on a
-consented real-world document, where numbered lists, tables and theme effects will
-test the resolution caveats beyond the synthetic fixtures. The ambiguous complaint still does not reach
-`needs_clarification` on e2b in the recorded revision-4 run.
+That 8/10 figure is the **earlier capability and prompt evaluation**, measured on the
+ten paragraph-property cases before explicit-break support existed. It is not a
+measurement of break handling and was not re-run for it; the live break observations
+are reported separately in `TEST_RESULTS.md` section 13.
+
+The supported **section-start change** shipped in this session, built on that
+inspection and the `GET /sections` contract; its measured results are in
+`TEST_RESULTS.md` section 15. A live run of the structural operations against
+`gemma4:e2b` was performed this session and **failed**: the model returned an
+invented schema and was rejected as `invalid_response`. A controlled comparison
+showed the previous prompt failing the same way, so it is not a regression. The
+deterministic slice is unaffected, and the remedy is recorded as an unfinished
+training experiment in `TINKER_NEXT.md`. Tinker itself is not started, and nothing in
+this version should be read as a promise about it.
+
+Still outstanding from before: verify sanitized traces in a configured hosted Sentry
+project, and expand browser coverage to other engines and assistive technology. Then
+exercise the workflow on a consented real-world document, where numbered lists, tables
+and theme effects will test the resolution caveats beyond the synthetic fixtures. The
+ambiguous complaint still does not reach `needs_clarification` on e2b in the recorded
+revision-4 run.
 
 No model weights, credentials, user documents or service subscriptions are bundled.
+
+## License
+
+This project is released under the MIT License; the full text is in `LICENSE`. That
+covers the code and documentation written for this repository. It does not relicense
+third-party material that ships alongside it: the bundled Rubik fonts in
+`frontend/src/assets/` stay under the SIL Open Font License carried beside them, the
+Python and npm dependencies keep their own licences, and the LibreOffice payload under
+`.tools/` — which is untracked — belongs to its own project.
