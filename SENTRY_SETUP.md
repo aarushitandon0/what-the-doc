@@ -81,7 +81,7 @@ nothing.
 $env:SENTRY_DSN = "<your project DSN from Sentry>"
 $env:WTD_SENTRY_TRACES_SAMPLE_RATE = "1.0"
 
-cd C:\Users\Aarushi\Downloads\What-the-Doc-Starter\what-the-doc
+cd <path-to-your-clone>\what-the-doc
 .\.venv\Scripts\python.exe api.py --cors http://localhost:5173
 ```
 
@@ -98,7 +98,7 @@ in a `VITE_*` variable.** The backend DSN stays server-side. The browser gets it
 project's DSN through `VITE_SENTRY_DSN`, set in the shell that runs the build:
 
 ```powershell
-cd C:\Users\Aarushi\Downloads\What-the-Doc-Starter\what-the-doc\frontend
+cd <path-to-your-clone>\what-the-doc\frontend
 $env:VITE_SENTRY_DSN = "<your BROWSER project DSN>"
 npm run build
 ```

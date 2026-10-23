@@ -47,7 +47,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\01-paragraph-faults.docx",
+        "path": "test-documents/01-paragraph-faults.docx",
         "faults": {
           "1": {
             "fault": "excessive_space_before",
@@ -113,7 +113,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\02-second-sample.docx",
+        "path": "test-documents/02-second-sample.docx",
         "ids": {
           "clean_heading": 1,
           "clean_body": 4,
@@ -295,7 +295,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\03-manual-page-break.docx",
+        "path": "test-documents/03-manual-page-break.docx",
         "paragraph_ids": {
           "heading": 0,
           "clean_paragraph": 1,
@@ -364,7 +364,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\04-column-break.docx",
+        "path": "test-documents/04-column-break.docx",
         "paragraph_ids": {
           "column_break_paragraph": 2,
           "page_break_paragraph": 3
@@ -421,7 +421,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\05-section-next-page.docx",
+        "path": "test-documents/05-section-next-page.docx",
         "section_count": 2,
         "eligible_section_index": 1,
         "eligible_defined_in": "body",
@@ -477,7 +477,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\06-section-default-start.docx",
+        "path": "test-documents/06-section-default-start.docx",
         "section_count": 2,
         "eligible_section_index": 1,
         "start_type_is_default": true,
@@ -532,7 +532,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\07-section-intentional.docx",
+        "path": "test-documents/07-section-intentional.docx",
         "section_count": 2,
         "eligible_section_index": 1,
         "intentional": true,
@@ -585,7 +585,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\08-section-unsupported.docx",
+        "path": "test-documents/08-section-unsupported.docx",
         "section_count": 2,
         "eligible_section_indexes": [],
         "refusal": "unsupported start type oddPage",
@@ -640,7 +640,7 @@
         }
       ],
       "generator": {
-        "path": "C:\\Users\\Aarushi\\Downloads\\What-the-Doc-Starter\\what-the-doc\\test-documents\\09-section-landscape.docx",
+        "path": "test-documents/09-section-landscape.docx",
         "section_count": 2,
         "eligible_section_indexes": [],
         "refusal": "differing page geometry",

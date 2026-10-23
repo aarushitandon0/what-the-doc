@@ -27,7 +27,7 @@ shorter than the list of things Word can do wrong.
 ## 1. Check what you have
 
 ```powershell
-cd C:\Users\Aarushi\Downloads\What-the-Doc-Starter\what-the-doc
+cd <path-to-your-clone>\what-the-doc
 .\.venv\Scripts\python.exe --version
 .\.venv\Scripts\python.exe -c "import render; print('renderer:', render.find_soffice())"
 node --version
@@ -48,7 +48,7 @@ python -m venv .venv
 ## 2. Start the backend
 
 ```powershell
-cd C:\Users\Aarushi\Downloads\What-the-Doc-Starter\what-the-doc
+cd <path-to-your-clone>\what-the-doc
 .\.venv\Scripts\python.exe api.py --cors http://localhost:5173
 ```
 
@@ -65,7 +65,7 @@ curl.exe http://127.0.0.1:8000/api/health
 ## 3. Start the frontend
 
 ```powershell
-cd C:\Users\Aarushi\Downloads\What-the-Doc-Starter\what-the-doc\frontend
+cd <path-to-your-clone>\what-the-doc\frontend
 npm ci
 npm run dev
 ```

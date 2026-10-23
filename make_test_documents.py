@@ -54,12 +54,22 @@ def paragraphs_of(path, limit=400):
             for p in engine.inspect(path)['paragraphs']][:limit]
 
 
+def portable_path(path):
+    """`path` relative to the repository root, with forward slashes on every OS."""
+    return Path(path).resolve().relative_to(HERE).as_posix()
+
+
 CASES = []
 
 
 def case(filename, builder, **entry):
     path = OUT / filename
     manifest = builder(path)
+    # The builders report the absolute path they wrote to. The manifest is committed,
+    # so it records the path relative to the repository root instead: an absolute path
+    # would name one developer's machine and be wrong on every other one.
+    if isinstance(manifest, dict) and 'path' in manifest:
+        manifest = dict(manifest, path=portable_path(path))
     entry.update({
         'file': filename,
         'sha256': engine.signature(path),

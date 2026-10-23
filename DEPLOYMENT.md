@@ -41,12 +41,12 @@ renderer — are not in a static site.
 
 ```powershell
 # backend
-cd C:\Users\Aarushi\Downloads\What-the-Doc-Starter\what-the-doc
+cd <path-to-your-clone>\what-the-doc
 $env:GEMMA_MODEL = "gemma4:e2b"
 .\.venv\Scripts\python.exe api.py --cors http://localhost:5173
 
 # frontend, separate window
-cd C:\Users\Aarushi\Downloads\What-the-Doc-Starter\what-the-doc\frontend
+cd <path-to-your-clone>\what-the-doc\frontend
 npm ci
 npm run dev
 ```

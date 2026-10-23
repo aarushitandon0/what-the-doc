@@ -15,7 +15,7 @@ Install the normal dependencies, then set these variables **before** starting a
 fresh backend process. Supply your own project DSN; none is checked into the app.
 
 ```powershell
-Set-Location 'C:\Users\Aarushi\Downloads\What-the-Doc-Starter\what-the-doc'
+Set-Location '<path-to-your-clone>\what-the-doc'
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
 $env:GEMMA_MODEL = 'gemma4:e2b'
 $env:SENTRY_DSN = '<your Sentry project DSN>'
