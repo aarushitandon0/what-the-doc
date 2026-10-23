@@ -151,6 +151,13 @@ $RECYCLE.BIN/
 *.lnk
 
 # ---------------------------------------------------------------------------
+# Agent tooling
+# ---------------------------------------------------------------------------
+# Rules files dropped in by locally installed agent plugins. They describe the
+# developer's own tools, not this project, so they stay on the machine they came from.
+.agents/
+
+# ---------------------------------------------------------------------------
 # Scratch space
 # ---------------------------------------------------------------------------
 # Somewhere to put a throwaway file without it showing up as untracked.
