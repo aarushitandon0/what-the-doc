@@ -88,8 +88,16 @@ def docx_to_pdf(source, out_dir, timeout=TIMEOUT_SECONDS):
     out_dir.mkdir(parents=True, exist_ok=True)
     # Convert into a fresh directory: a failed retry must not reuse an older PDF.
     # Publish the result only once this conversion has produced a readable PDF.
-    with tempfile.TemporaryDirectory(prefix='wtd-render-', dir=out_dir) as staging, \
-            tempfile.TemporaryDirectory(prefix='wtd-profile-') as profile:
+    # Cleanup errors are ignored on purpose. On Windows soffice.exe is a launcher: a
+    # timeout kills it, but the worker it started can still hold the half-written PDF
+    # open, so deleting the staging directory fails. That OSError used to replace the
+    # real reason (the timeout) and surface as an internal error. A leftover staging
+    # directory is harmless: every conversion stages into a fresh one, and only a
+    # validated PDF is ever moved out of it.
+    with tempfile.TemporaryDirectory(prefix='wtd-render-', dir=out_dir,
+                                     ignore_cleanup_errors=True) as staging, \
+            tempfile.TemporaryDirectory(prefix='wtd-profile-',
+                                        ignore_cleanup_errors=True) as profile:
         # A unique profile stops a shared one from locking, and keeps recovery data out.
         command = [binary,
                    '-env:UserInstallation=' + Path(profile).resolve().as_uri(),

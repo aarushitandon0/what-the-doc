@@ -75,7 +75,22 @@ export const getSections = (documentId, signal) => request(`/api/documents/${id(
 export const getDocumentPreview = (documentId, signal) =>
   request(`/api/documents/${id(documentId)}/preview`, {signal});
 
-export const getPeers = (documentId, paragraphId, signal) =>
+/** The uploaded .docx bytes, unchanged, as a Blob. The browser draws the instant
+ *  preview from these; LibreOffice is far too slow on a CPU to show a document the
+ *  moment it opens. */
+export async function getOriginal(documentId, signal) {
+  let response;
+  try {
+    response = await fetch(`${API_BASE}/api/documents/${id(documentId)}/original`, {signal});
+  } catch (cause) {
+    if (cause?.name === 'AbortError') throw cause;
+    throw new ApiError('The local API is not reachable.', {code: 'backend_unreachable', detail: String(cause?.message || cause)});
+  }
+  if (!response.ok) throw new ApiError(`Request failed (${response.status})`, {status: response.status, code: `http_${response.status}`});
+  return response.blob();
+}
+
+export const getPeers =(documentId, paragraphId, signal) =>
   request(`/api/documents/${id(documentId)}/paragraphs/${id(paragraphId)}/peers`, {signal});
 
 export const createJob = ({documentId, paragraphId, complaint, render = true, expectedSourceSha256, model, timeout, breakTargetId, sectionTargetId}, signal) =>
@@ -156,6 +171,22 @@ export const breakLabel = (record) => {
   const kind = record.break_type === 'column' ? 'Column break' : record.break_type === 'page' ? 'Page break' : 'Line break';
   return `${kind} ${record.ordinal_in_paragraph || 1} in ¶${record.paragraph_id}`;
 };
+
+/** Plain words for why the checks threw an answer away. Branches on the server's
+ *  recorded reason; anything not recognised gets the general sentence. */
+export const refusalText = (detail = '') => {
+  const d = String(detail || '');
+  if (/^duplicate evidence entry/i.test(d)) return 'Its answer listed the same piece of evidence twice. Answers like that are thrown away, because in testing they often came with a wrong suggestion.';
+  if (/^ineffective operation/i.test(d)) return 'The change it suggested would not change anything on the page: that setting already has that value.';
+  if (/evidence does not cite/i.test(d)) return 'It tried to change a setting it had not looked at.';
+  if (/must carry no operations|empty plan/i.test(d)) return 'Its answer contradicted itself.';
+  if (/invalid JSON|no content/i.test(d)) return 'Its answer was not readable.';
+  return 'Its answer did not meet the rules every suggestion has to follow.';
+};
+
+/** Failures where Gemma answered but the checks discarded the answer. Nothing went
+ *  wrong with the app; there is just no safe change to show. */
+export const isRefusal = (job) => job?.state === 'failed' && ['invalid_response', 'invalid_operation'].includes(job?.error_code);
 
 export const errorText = (error) =>
   ERROR_TEXT[error?.code] || error?.detail || error?.message || 'Something went wrong.';

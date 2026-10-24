@@ -74,3 +74,37 @@
 .results-main .results-comparison{margin:30px auto;text-align:left}
 .results-main .results-comparison .preview-pages{max-width:none}
 .inspector a.text-button{display:block;margin:10px 0}
+
+/* Instant browser preview of the uploaded file (docx-preview). The library draws
+   white pages on its own grey wrapper; the canvas is already grey, so the wrapper's
+   padding and background are dropped and pages are capped at the canvas width. */
+.docx-pages{max-width:100%;margin:auto}
+.docx-host{overflow-x:auto}
+.docx-host .docx-wrapper{background:transparent;padding:0;display:flex;flex-direction:column;align-items:center;gap:18px}
+.docx-host .docx-wrapper>section.docx{margin:0;box-shadow:0 2px 10px rgba(19,34,29,.12);border:1px solid var(--line,#e4dccb)}
+.docx-pages+.fineprint{max-width:710px;margin:18px auto 0;text-align:center}
+
+/* Nothing is pre-selected, so the inspector says what to do first. */
+.pick-hint{margin:0 0 16px;padding:.75rem .9rem;border-radius:12px;background:#ffe9c9;font-size:.88rem;line-height:1.5}
+.outline-item.whole-document{border:1px dashed #bfceae;margin-bottom:12px}
+.outline-item.whole-document.selected{border-style:solid}
+.back-to-scan{display:inline-flex;align-items:center;gap:6px;margin:0 0 12px;padding:0;min-height:0}
+.back-to-scan svg{width:14px;height:14px}
+
+/* Whole-document results: one row per paragraph, opened to review on its own. */
+.scan-list{list-style:none;margin:14px 0 18px;padding:0;display:flex;flex-direction:column;gap:6px}
+.scan-row{display:flex;width:100%;align-items:center;gap:12px;text-align:left;padding:10px 12px;border-radius:10px;border:1px solid var(--line,#e4dccb);background:#fff;font:inherit;cursor:pointer}
+.scan-row:disabled{cursor:default}
+.scan-row>span:first-child{font-size:11px;color:#5d6b63;min-width:2.2em}
+.scan-row>span:nth-child(2){flex:1;min-width:0}
+.scan-row strong{display:block;font-size:.85rem}
+.scan-row small{display:block;font-size:.75rem;color:#4a5750;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.scan-row svg{width:16px;height:16px;flex:none}
+.scan-row.good{background:#e0e9d5;border-color:#bfceae}
+.scan-row.busy{background:#fff7e9;border-color:#ff8739}
+.scan-row.bad{background:#fbe4df;border-color:#e3b2a7}
+
+/* The server's verbatim reason, folded away under the plain explanation. */
+.tech-details{margin-top:16px;font-size:.8rem;color:#4a5750}
+.tech-details summary{cursor:pointer;font-weight:600}
+.tech-details p{margin:.4rem 0;word-break:break-word}

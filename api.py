@@ -617,6 +617,21 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             raise ApiError(404, NOT_FOUND, 'No such preview page')
         return FileResponse(image, media_type='image/png')
 
+    @app.get('/api/documents/{document_id}/original')
+    def get_document_original(document_id: str = PathParam(...)):
+        """The uploaded .docx bytes, unchanged, so the browser can draw a preview at once.
+
+        LibreOffice takes tens of seconds on a CPU-only machine, so the workspace draws
+        the file itself in the browser and keeps LibreOffice for the before/after
+        comparison, where both sides must come from the same renderer. The path is the
+        server's own, never a client value, and the file is never written to.
+        """
+        _document(document_id)
+        return FileResponse(store.document_path(document_id),
+                            media_type=('application/vnd.openxmlformats-officedocument.'
+                                        'wordprocessingml.document'),
+                            headers={'Cache-Control': 'no-store'})
+
     @app.get('/api/documents/{document_id}/sections')
     def get_sections(document_id: str = PathParam(...)):
         """Section boundaries, start types, and which sections may be converted.

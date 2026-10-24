@@ -37,6 +37,24 @@ class DocumentPreviewTests(ApiBase):
         self.assertEqual(
             self.client.get('/api/documents/..%2F..%2Fetc/preview').status_code, 404)
 
+    def test_the_original_bytes_are_served_unchanged_for_the_browser_preview(self):
+        # The browser draws the instant preview from these bytes, so they must be the
+        # stored original exactly, and must not depend on LibreOffice being installed.
+        self.environment(SOFFICE_PATH=str(self.root / 'no-such-soffice'))
+        document_id = self.uploaded_id()
+        stored = self.root / 'store' / 'documents' / document_id / 'original.docx'
+        self.assertTrue(stored.is_file(), stored)
+        response = self.client.get('/api/documents/%s/original' % document_id)
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertIn('wordprocessingml.document', response.headers['content-type'])
+        self.assertEqual(response.content, stored.read_bytes())
+
+    def test_an_unknown_document_has_no_original(self):
+        self.assertEqual(
+            self.client.get('/api/documents/%s/original' % ('a' * 32)).status_code, 404)
+        self.assertEqual(
+            self.client.get('/api/documents/..%2F..%2Fetc/original').status_code, 404)
+
     @unittest.skipUnless(render_module.find_soffice(),
                          'LibreOffice is not installed; document rendering is skipped')
     def test_the_original_renders_to_page_images_that_are_served_once(self):

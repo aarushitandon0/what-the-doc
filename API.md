@@ -583,6 +583,20 @@ wrong".
 
 ## 5. Previews
 
+### The original bytes
+
+```
+GET /api/documents/{document_id}/original
+```
+
+Returns the stored `.docx` unchanged (`application/vnd.openxmlformats-officedocument.wordprocessingml.document`,
+`Cache-Control: no-store`), or 404 for an unknown id. The web app draws its instant
+preview from these bytes in the browser (`docx-preview`), because a LibreOffice render
+takes 15–30 s on a CPU-only machine. An upload made in the same tab is drawn from the
+file already in memory and does not call this. LibreOffice stays the renderer for every
+before/after comparison, so both sides of a comparison always come from one renderer;
+the `preview` endpoints below are the fallback when the browser cannot draw a file.
+
 ### The document as uploaded
 
 ```

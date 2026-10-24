@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useRef,useCallback} from 'react';
 import {ArrowUpRight,ArrowLeft,Check,FileText,Upload,Plus,Minus,X,ShieldCheck,Download,Clock,AlertCircle} from 'lucide-react';
-import {Header,Footer,DemoBanner,Steps,Badge,Button,PageHeading,Paper,Empty,ConnectionBanner,ApiErrorNote,JobProgress,PreviewPages,PropertyList,InvariantList,ModeBadge,OfflineHold,BreakSelector,BreakTargetList,PageCountChange,SectionList,SectionTargetList} from './components';
+import {Header,Footer,DemoBanner,Steps,Badge,Button,PageHeading,Paper,Empty,ConnectionBanner,ApiErrorNote,JobProgress,PreviewPages,PropertyList,InvariantList,ModeBadge,OfflineHold,BreakSelector,BreakTargetList,PageCountChange,SectionList,SectionTargetList,DocxPages,TechDetails} from './components';
 import {paragraphs,validateFile,readHistory,report} from './data';
 import * as api from './api';
 
@@ -55,6 +55,14 @@ export default function App(){
   * never written to. `null` means "not asked yet", which the canvas shows as
   * loading rather than as "no render". */
  const [docPreview,setDocPreview]=useState(null),[docView,setDocView]=useState('pages');
+ /* The original file itself, for the instant browser preview. `docSourceFailed` holds the
+  * reason the browser could not draw it, which is when the LibreOffice render is asked
+  * for instead. */
+ const [docSource,setDocSource]=useState(null),[docSourceFailed,setDocSourceFailed]=useState(null);
+ /* Whole-document check: the same complaint asked about each paragraph in turn, one
+  * job each. `wholeDoc` is the selection; `scan` is the run and its results. */
+ const [wholeDoc,setWholeDoc]=useState(false),[scan,setScan]=useState(null);
+ const scanStop=useRef(false),scanAbort=useRef(null),openDocId=useRef(null);
  const [busy,setBusy]=useState(''),[apiError,setApiError]=useState(null),[elapsed,setElapsed]=useState(0);
  const [jobs,setJobs]=useState([]);
  const abort=useRef(null),clock=useRef(null);
@@ -75,7 +83,9 @@ export default function App(){
  const loadParagraphs=async(documentId)=>{
   const body=await api.getParagraphs(documentId);
   setDocParagraphs(body.paragraphs||[]);
-  setLiveSelected(body.paragraphs?.[0]?.paragraph_id??null);
+  /* Nothing is selected for the person. Pre-selecting the first paragraph sent
+   * complaints about some other paragraph to the title, where they could only fail. */
+  setLiveSelected(null);
   /* Breaks and sections come from the server for this revision. A failure here is
    * reported and leaves them null: the UI then says nothing was inspected rather
    * than implying the document has no breaks. */
@@ -98,16 +108,32 @@ export default function App(){
   catch(error){if(error?.name==='AbortError')return;result={rendered:false,page_count:0,urls:[],unavailable_reason:api.errorText(error)};}
   if(previewFor.current===documentId)setDocPreview(result);
  };
- const openDocument=async(record)=>{
+ /* The browser could not draw the file, so the slower LibreOffice render is the
+  * fallback. Only for the document still open. */
+ const browserPreviewFailed=(documentId,reason)=>{
+  if(openDocId.current!==documentId)return;
+  setDocSourceFailed(reason||'the browser could not draw this file');
+  loadDocPreview(documentId);
+ };
+ /* A document opened from this tab's upload is drawn from the File already in memory,
+  * with no round trip; anything else (the sample) is fetched once. */
+ const loadOriginal=async(documentId)=>{
+  try{const blob=await api.getOriginal(documentId);if(openDocId.current===documentId)setDocSource(blob);}
+  catch(error){if(error?.name!=='AbortError')browserPreviewFailed(documentId,api.errorText(error));}
+ };
+ const openDocument=async(record,localFile=null)=>{
   previewFor.current=null;setDocPreview(null);
+  openDocId.current=record.document_id;setDocSource(localFile);setDocSourceFailed(null);
+  scanStop.current=true;scanAbort.current?.abort();setScan(null);setWholeDoc(false);
   setDemoChosen(false);setDoc(record);setJob(null);setApiError(null);setSelectedBreak(null);setSelectedSection(null);setDocView('pages');
-  try{await loadParagraphs(record.document_id);go('workspace');loadDocPreview(record.document_id);}catch(error){fail(error);}
+  try{await loadParagraphs(record.document_id);go('workspace');if(!localFile)loadOriginal(record.document_id);}catch(error){fail(error);}
  };
  const uploadReal=async(f)=>{
   const message=validateFile(f);
   if(message){setFileError(message);return;}
   setFileError('');setFile(f);setBusy('uploading');setApiError(null);
-  try{await openDocument(await api.uploadDocument(f));}catch(error){fail(error);}finally{setBusy('');}
+  import('docx-preview').catch(()=>{});// fetched while the upload runs, so drawing starts at once
+  try{await openDocument(await api.uploadDocument(f),f);}catch(error){fail(error);}finally{setBusy('');}
  };
  const openDemoDocument=async()=>{
   setBusy('demo');setApiError(null);
@@ -140,18 +166,62 @@ export default function App(){
    setJob(started);go('workspace');watch(started);
   }catch(error){fail(error);}finally{setBusy('');}
  };
+ /* Whole document: the complaint is asked about every paragraph that has text, one job
+  * after another, through exactly the same endpoint and checks as a single paragraph.
+  * Nothing is combined or applied: each result is opened and reviewed on its own. */
+ const scanTargets=docParagraphs.filter(p=>p.text?.trim());
+ const syncScan=(updated)=>setScan(s=>s&&{...s,items:s.items.map(it=>it.job?.job_id===updated.job_id?{...it,job:updated,state:updated.state}:it)});
+ const runScan=async()=>{
+  if(!complaint.trim()){notify('Tell us what looks wrong first.');document.getElementById('complaint')?.focus();return;}
+  if(!scanTargets.length){notify('This document has no paragraphs with text to check.');return;}
+  const documentId=doc.document_id,text=complaint;
+  abort.current?.abort();scanAbort.current?.abort();
+  const controller=new AbortController();scanAbort.current=controller;scanStop.current=false;
+  const items=scanTargets.map(p=>({paragraph_id:p.paragraph_id,state:'waiting',job:null,error:null}));
+  const update=(i,patch)=>setScan(s=>s&&s.documentId===documentId?{...s,items:s.items.map((it,k)=>k===i?{...it,...patch}:it)}:s);
+  setApiError(null);setJob(null);
+  setScan({documentId,complaint:text,items,running:true,skipped:docParagraphs.length-items.length,startedAt:Date.now()});
+  const startedAt=Date.now();clearInterval(clock.current);setElapsed(0);
+  clock.current=setInterval(()=>setElapsed(Math.floor((Date.now()-startedAt)/1000)),1000);
+  for(let i=0;i<items.length;i++){
+   if(scanStop.current)break;
+   update(i,{state:'running'});
+   try{
+    const started=await api.createJob({documentId,paragraphId:items[i].paragraph_id,complaint:text,render:backend.health?.renderer?.available!==false,expectedSourceSha256:doc.source_sha256},controller.signal);
+    update(i,{job:started});
+    const finished=await api.pollJob(started.job_id,{signal:controller.signal});
+    update(i,{state:finished.state,job:finished});
+   }catch(error){
+    if(error?.name==='AbortError'){update(i,{state:'stopped'});break;}
+    update(i,{state:'error',error:api.errorText(error)});
+    // Conditions that will refuse every later paragraph too end the run.
+    if(['backend_unreachable','model_unavailable','not_found'].includes(error?.code)){fail(error);break;}
+   }
+  }
+  clearInterval(clock.current);
+  setScan(s=>s&&s.documentId===documentId?{...s,running:false,items:s.items.map(it=>it.state==='waiting'?{...it,state:'not_checked'}:it)}:s);
+ };
+ /* Stopping ends the run after the paragraph in progress; the server cannot cancel a
+  * model call already under way, and that one job still finishes on its own. */
+ const stopScan=()=>{scanStop.current=true;scanAbort.current?.abort();};
+ const openScanResult=(item)=>{
+  if(!item.job||api.isPending(item.job))return;
+  setWholeDoc(false);setLiveSelected(item.paragraph_id);setSelectedBreak(null);setSelectedSection(null);setJob(item.job);
+  setDocView(item.job.preview?.rendered&&item.job.preview.after_urls?.length&&['awaiting_review','accepted'].includes(item.job.state)?'after':'pages');
+ };
+ const backToScan=()=>{setJob(null);setWholeDoc(true);setDocView('pages');};
  const acceptLive=async()=>{
   if(job?.state!=='awaiting_review')return;
   setBusy('accepting');setApiError(null);
   try{
    const updated=await api.acceptJob(job.job_id,job.candidate?.accept_requires_candidate_sha256||job.candidate?.candidate_sha256);
-   setJob(updated);go('results');
+   setJob(updated);syncScan(updated);go('results');
   }catch(error){fail(error);}finally{setBusy('');}
  };
  const rejectLive=async()=>{
   if(job?.state!=='awaiting_review')return;
   setBusy('rejecting');setApiError(null);
-  try{setJob(await api.rejectJob(job.job_id,'reviewer kept the original'));go('workspace');notify('Original kept. The candidate stays on disk for inspection.');}
+  try{const updated=await api.rejectJob(job.job_id,'reviewer kept the original');setJob(updated);syncScan(updated);go('workspace');notify('Original kept. The candidate stays on disk for inspection.');}
   catch(error){fail(error);}finally{setBusy('');}
  };
  const loadJobs=useCallback(async()=>{
@@ -189,14 +259,22 @@ export default function App(){
  /* The candidate's pages, once a job has rendered one. They are a proposal until a
   * person accepts them, and the canvas label says which of the two it is showing. */
  const afterPages=(previewReady&&['awaiting_review','accepted'].includes(job?.state)&&job.preview.after_urls)||[];
+ /* The browser-drawn original, used until a job has LibreOffice pages to compare. A
+  * comparison keeps both sides from one renderer, so it never mixes the two. */
+ const quickPreview=Boolean(docSource)&&!docSourceFailed&&!afterPages.length;
  const canvasView=docView==='after'&&!afterPages.length?'pages':docView;
  const viewOptions=afterPages.length?[['pages','Before'],['after','After'],['text','Text']]:[['pages','Pages'],['text','Text']];
  /* One way to change the selected paragraph, from the outline or the text view. A
   * break or section id belongs to one paragraph, so both are cleared with it. */
  const selectLive=(paragraphId)=>{
-  if(api.isPending(job)||paragraphId===liveSelected)return;
-  setLiveSelected(paragraphId);setJob(null);setSelectedBreak(null);setSelectedSection(null);
+  if(api.isPending(job)||scan?.running||(paragraphId===liveSelected&&!wholeDoc))return;
+  setWholeDoc(false);setLiveSelected(paragraphId);setJob(null);setSelectedBreak(null);setSelectedSection(null);
  };
+ const selectWhole=()=>{
+  if(api.isPending(job)||scan?.running)return;
+  setWholeDoc(true);setLiveSelected(null);setJob(null);setSelectedBreak(null);setSelectedSection(null);setDocView('pages');
+ };
+ const scanBusy=Boolean(scan?.running);
  const breaksHere=(breaks?.breaks||[]).filter(b=>b.paragraph_id===liveSelected&&b.edit_eligible);
  const renderUnavailable=backend.health?.renderer?.available===false;
  /* A structural change the server will not accept unrendered. The button is disabled
@@ -221,7 +299,7 @@ export default function App(){
    </aside></div>
   <div className="reassurance"><span><ShieldCheck/> Original never modified</span><span><Check/> You review every change</span><span><FileText/> Repaired .docx on acceptance</span></div></>;
 
- const liveInspector=()=>{
+ const inspectorBody=()=>{
   if(api.isPending(job))return <JobProgress job={job} elapsed={elapsed} onStopWatching={()=>abort.current?.abort()}/>;
   if(job?.state==='awaiting_review')return <><ModeBadge job={job}/><h2>A candidate<br/>to review.</h2>
    <p>{job.diagnosis?.explanation}</p>
@@ -243,13 +321,20 @@ export default function App(){
    <p className="fineprint">Your original is untouched. Another fix here starts from the original again; to build on this repair, upload the downloaded file.</p>
    <Button secondary onClick={()=>{setJob(null);setDocView('pages');}}>Fix something else</Button></>;
   if(job?.state==='no_supported_repair')return <><Badge tone="warning"><AlertCircle/> {job.diagnosis?.status?.toUpperCase()}</Badge><h2>Nothing<br/>to apply.</h2><p>{job.diagnosis?.explanation}</p><p className="fineprint">{stateNote[job.state]}</p><Button onClick={()=>setJob(null)}>Describe something else</Button></>;
+  /* Gemma answered, but the safety checks threw the answer away. That is the checks
+   * working, not the app breaking, so it is said plainly rather than as a crash. */
+  if(api.isRefusal(job))return <><ModeBadge job={job}/><Badge tone="quiet">NOTHING CHANGED</Badge><h2>No safe fix<br/>found.</h2>
+   <p>Gemma suggested something for ¶{job.paragraph_id}, but it did not pass the safety checks, so it was thrown away.</p>
+   <p className="fineprint">{api.refusalText(job.error_detail)}</p>
+   <p className="fineprint">Asking the same thing again usually gets the same answer. Try describing what you see in other words, or pick the paragraph where the problem actually is.</p>
+   <p className="fineprint">Your original document is untouched.</p>
+   <Button onClick={()=>setJob(null)}>Describe it differently</Button>
+   <TechDetails job={job}/></>;
   if(job?.state==='failed')return <><ModeBadge job={job}/><Badge tone="warning"><AlertCircle/> {job.error_code}</Badge><h2>That run<br/>failed.</h2>
    <p>{api.ERROR_TEXT[job.error_code]||job.error_detail}</p>
    {/* The server's own words, kept verbatim and marked as such. Not attributed to
      * the validator: the same codes also cover timeouts, runtime errors and renders. */}
    {job.error_detail&&<p className="fineprint">Reason recorded: “{job.error_detail}”.</p>}
-   {job.attempts>1&&<p className="fineprint">Gemma was asked {job.attempts} times{job.max_attempts?` of ${job.max_attempts}`:''} and every answer was refused. Asking again is unlikely to help unless the complaint changes.</p>}
-   {job.error_code==='invalid_response'&&!(job.attempts>1)&&<p className="fineprint">Asking the same question again often gets the same answer. Describing the problem differently, or choosing another paragraph, is more likely to help.</p>}
    {/* A run can fail after a candidate was built (a render or invariant failure), so
      * the claim is about the original, which is never written to. */}
    <p className="fineprint">Your original document is untouched.</p>
@@ -257,17 +342,53 @@ export default function App(){
   if(job?.state==='rejected')return <><Badge tone="quiet">Original kept</Badge><h2>Rejected.</h2><p>The candidate stays on disk for inspection and cannot be accepted later.</p><Button onClick={()=>setJob(null)}>Describe something else</Button></>;
   return <><span className="eyebrow">TELL US WHAT’S OFF</span><h2>What the<br/>document?</h2>
    <ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>
-   <label className="field-label" htmlFor="complaint">What looks wrong?</label>
-   <textarea id="complaint" rows={4} value={complaint} onChange={e=>setComplaint(e.target.value)} placeholder="This heading is miles from the paragraph above it."/>
-   <div className="chips">{['Too much space above this heading','This paragraph is not aligned like the others','This heading keeps jumping to a new page','There is a page break here I did not want','This column break splits the text oddly'].map(t=><button key={t} onClick={()=>setComplaint(t)}>{t}</button>)}</div>
+   {liveSelected===null&&<p className="pick-hint">First, click the paragraph that looks wrong in the list on the left — or choose <button className="text-button inline" onClick={selectWhole} disabled={scanBusy}>Whole document</button> to check every paragraph.</p>}
+   {complaintField()}
    <div className="selection-detail"><span className="eyebrow">SELECTED PARAGRAPH</span><strong>{liveParagraph?`¶${liveParagraph.paragraph_id} · ${liveParagraph.style_id||'no style'}`:'None selected'}</strong><small>{liveParagraph?paragraphLabel(liveParagraph).slice(0,90):'Choose a paragraph in the outline.'}</small></div>
    <PropertyList paragraph={liveParagraph}/>
    <BreakSelector report={breaks} paragraphId={liveSelected} selectedId={selectedBreak} onSelect={id=>{setSelectedBreak(id);if(id)setSelectedSection(null);}} disabled={api.isPending(job)}/>
    {breaksHere.length>1&&!selectedBreak&&<p className="fineprint">This paragraph has {breaksHere.length} removable breaks. Pick the one you mean, or say which in your own words — nothing will guess for you.</p>}
    {renderUnavailable&&breaksHere.length>0&&<p className="fineprint">LibreOffice is unavailable, so a break removal cannot be reviewed and the server will refuse it. Paragraph spacing, indent and alignment repairs still work.</p>}
-   <Button className="full" disabled={backend.state!=='live'||busy==='diagnosing'||liveSelected===null} onClick={diagnoseLive}>{busy==='diagnosing'?'Starting…':<>Diagnose with Gemma <ArrowUpRight/></>}</Button>
+   <Button className="full" disabled={backend.state!=='live'||busy==='diagnosing'||liveSelected===null||scanBusy} onClick={diagnoseLive}>{busy==='diagnosing'?'Starting…':liveSelected===null?'Pick a paragraph first':<>Diagnose with Gemma <ArrowUpRight/></>}</Button>
    {backend.state!=='live'&&<p className="fineprint">Live diagnosis is unavailable: {backend.health?.model_runtime?.reason||'no Gemma runtime'}. Nothing is substituted in its place.</p>}
-   <p className="fineprint">CPU inference takes 70–180 seconds per call. One job runs at a time.</p></>;
+   <p className="fineprint">Takes 1–3 minutes on this computer. One check runs at a time.</p></>;
+ };
+ const complaintField=()=><>
+  <label className="field-label" htmlFor="complaint">What looks wrong?</label>
+  <textarea id="complaint" rows={4} value={complaint} disabled={scanBusy} onChange={e=>setComplaint(e.target.value)} placeholder="This heading is miles from the paragraph above it."/>
+  <div className="chips">{['Too much space above this heading','This paragraph is not aligned like the others','This heading keeps jumping to a new page','There is a page break here I did not want','This column break splits the text oddly'].map(t=><button key={t} disabled={scanBusy} onClick={()=>setComplaint(t)}>{t}</button>)}</div></>;
+ /* What each whole-document row says. A refused answer is not a crash, so it reads the
+  * same as on a single paragraph. */
+ const scanLabel={waiting:'Waiting',running:'Checking…',awaiting_review:'Fix ready to review',accepted:'Fix accepted',rejected:'Original kept',no_supported_repair:'Nothing to fix',needs_clarification:'Gemma has a question',stopped:'Stopped',not_checked:'Not checked',error:'Could not check'};
+ const scanText=it=>it.state==='failed'?(api.isRefusal(it.job)?'No safe fix found':'Failed'):scanLabel[it.state]||it.state;
+ const scanTone=it=>['awaiting_review','accepted'].includes(it.state)?'good':it.state==='running'?'busy':['error','failed'].includes(it.state)&&!api.isRefusal(it.job)?'bad':'quiet';
+ const scanPanel=()=>{
+  const n=scanTargets.length,skipped=docParagraphs.length-n;
+  if(!scan)return <><span className="eyebrow">WHOLE DOCUMENT</span><h2>Check every<br/>paragraph.</h2>
+   <ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>
+   {complaintField()}
+   <p className="fineprint">Gemma checks the {n} paragraph{n===1?'':'s'} with text one at a time{skipped?` (${skipped} empty one${skipped===1?' is':'s are'} skipped)`:''}. Each takes 1–3 minutes on this computer, so expect roughly {n}–{n*3} minutes. Every fix it finds is shown to you on its own before anything changes.</p>
+   <Button className="full" disabled={backend.state!=='live'||!n} onClick={runScan}>Check all {n} paragraph{n===1?'':'s'} <ArrowUpRight/></Button>
+   {backend.state!=='live'&&<p className="fineprint">Live diagnosis is unavailable: {backend.health?.model_runtime?.reason||'no Gemma runtime'}.</p>}</>;
+  const done=scan.items.filter(it=>!['waiting','running'].includes(it.state)).length;
+  const fixes=scan.items.filter(it=>['awaiting_review','accepted'].includes(it.state)).length;
+  return <><span className="eyebrow">WHOLE DOCUMENT · {scan.running?'CHECKING':'FINISHED'}</span>
+   <h2>{scan.running?<>Checking<br/>paragraphs.</>:fixes?<>{fixes} fix{fixes===1?'':'es'}<br/>to review.</>:<>No fixes<br/>found.</>}</h2>
+   <p role="status">{done} of {scan.items.length} checked{scan.running?` · ${Math.floor(elapsed/60)}m ${String(elapsed%60).padStart(2,'0')}s`:''}</p>
+   <p className="fineprint">Your description: “{scan.complaint}”</p>
+   <ol className="scan-list">{scan.items.map(it=>{
+     const p=docParagraphs.find(x=>x.paragraph_id===it.paragraph_id);
+     const openable=Boolean(it.job)&&!api.isPending(it.job)&&!['waiting','running','stopped'].includes(it.state);
+     return <li key={it.paragraph_id}><button className={`scan-row ${scanTone(it)}`} disabled={!openable} onClick={()=>openScanResult(it)}>
+      <span>¶{it.paragraph_id}</span><span><strong>{scanText(it)}</strong><small>{it.error||(p?paragraphLabel(p).slice(0,60):'')}</small></span>{openable&&<ArrowUpRight aria-hidden="true"/>}</button></li>;})}</ol>
+   {scan.running
+    ?<><Button secondary onClick={stopScan}>Stop checking</Button><p className="fineprint">A paragraph already being checked still finishes on the server; it appears under My documents.</p></>
+    :<><Button secondary onClick={()=>setScan(null)}>Start a new check</Button>
+      {fixes>1&&<p className="fineprint">Each fix was made on your original separately. Accept one, download it, then upload that file to apply the next.</p>}</>}</>;
+ };
+ const liveInspector=()=>{
+  if(wholeDoc)return scanPanel();
+  return <>{scan&&<button className="text-button back-to-scan" onClick={backToScan}><ArrowLeft/> All paragraphs</button>}{inspectorBody()}</>;
  };
 
  const liveWorkspace=()=><><div className="workspace-toolbar">
@@ -278,20 +399,23 @@ export default function App(){
   {api.isPending(job)&&<ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>}
   <div className="workspace">
    <aside className="outline-panel"><span className="eyebrow">IN THIS DOCUMENT</span>
-    <div className="outline-scroll">{docParagraphs.map(p=><button key={p.paragraph_id} disabled={api.isPending(job)} className={`outline-item ${liveSelected===p.paragraph_id?'selected':''}`} aria-pressed={liveSelected===p.paragraph_id} onClick={()=>selectLive(p.paragraph_id)}>
+    <button disabled={api.isPending(job)||scanBusy} className={`outline-item whole-document ${wholeDoc?'selected':''}`} aria-pressed={wholeDoc} onClick={selectWhole}>
+     <span>All</span><span><strong>Whole document</strong><small>Check every paragraph</small></span></button>
+    <div className="outline-scroll">{docParagraphs.map(p=><button key={p.paragraph_id} disabled={api.isPending(job)||scanBusy} className={`outline-item ${liveSelected===p.paragraph_id?'selected':''}`} aria-pressed={liveSelected===p.paragraph_id} onClick={()=>selectLive(p.paragraph_id)}>
      <span>{p.paragraph_id}</span><span><strong>{paragraphLabel(p).slice(0,38)}</strong><small>{p.style_id||'no style'}</small></span></button>)}</div>
     <SectionList report={sections} selectedId={selectedSection} disabled={api.isPending(job)} onSelect={id=>{setSelectedSection(id);if(id)setSelectedBreak(null);}}/>
     <a className="backlink" href="#upload"><Plus/> Different document</a></aside>
    <section className="canvas"><div className="canvas-label">
      <span>{canvasView==='after'
        ?(job.state==='accepted'?'AFTER · ACCEPTED REPAIR':'AFTER · PROPOSED, NOT ACCEPTED')
+       :quickPreview&&canvasView==='pages'?'YOUR DOCUMENT · INSTANT PREVIEW'
        :docPages.length&&canvasView==='pages'?(afterPages.length?'BEFORE · YOUR ORIGINAL':'YOUR DOCUMENT · RENDERED BY LIBREOFFICE'):'DOCUMENT EVIDENCE'}</span>
      <span className="canvas-controls">
       {/* The page view is the document as it stands; once a job has rendered a
         * candidate, an After view shows that candidate. The text view is the same
         * paragraphs the diagnosis is given, and stays reachable because it is the
         * only view with the ids, styles and click targets the selection needs. */}
-      {(docPages.length>0||afterPages.length>0)&&<span className="segmented small" role="group" aria-label="Document view">
+      {(quickPreview||docPages.length>0||afterPages.length>0)&&<span className="segmented small" role="group" aria-label="Document view">
         {viewOptions.map(([v,t])=><button key={v} aria-pressed={canvasView===v} onClick={()=>setDocView(v)}>{t}</button>)}</span>}
       <span>{job?`job ${job.job_id.slice(0,8)} · ${job.state}`:`document ${doc.document_id.slice(0,8)}`}</span></span></div>
     {canvasView==='after'
@@ -299,14 +423,19 @@ export default function App(){
         <p className="fineprint">{job.state==='accepted'
           ?<>This is the accepted repair. <a className="text-button inline" href={api.downloadUrl(job.job_id)} download>Download the repaired .docx</a>.</>
           :<>This is a proposal, not a change: nothing is written until you accept it. <a className="text-button inline" href="#review">Compare before and after</a>.</>}</p></>
+     : quickPreview&&canvasView==='pages'
+     ? <><DocxPages key={doc.document_id} source={docSource} zoom={zoom} onFailed={reason=>browserPreviewFailed(doc.document_id,reason)}/>
+        <p className="fineprint">Your file as uploaded, drawn instantly by your browser. Word may lay it out slightly differently. Nothing here is a repair. To pick a paragraph, use the list on the left or switch to <button className="text-button inline" onClick={()=>setDocView('text')}>Text</button>.</p></>
      : docPages.length>0&&canvasView==='pages'
      ? <><PreviewPages urls={docPages} label="Your document" zoom={zoom}/>
         <p className="fineprint">{docPreview?.note} Nothing here is a repair: this is the file you uploaded. Switch to <button className="text-button inline" onClick={()=>setDocView('text')}>Text</button> to pick a paragraph.</p></>
      : <div className="evidence-list" style={{fontSize:`${zoom/100}rem`}}>{docParagraphs.map(p=><article key={p.paragraph_id} className={`evidence-row ${liveSelected===p.paragraph_id?'target':''}`} onClick={()=>selectLive(p.paragraph_id)}>
         <header><span>¶{p.paragraph_id}</span><small>{p.style_id||'no style'}</small></header>
         <p>{paragraphLabel(p)}</p></article>)}
-       {docPreview===null
-        ? <p className="fineprint">Rendering your document with LibreOffice… the pages appear here when it finishes.</p>
+       {quickPreview||docPages.length>0||!docSourceFailed
+        ? null
+        : docPreview===null
+        ? <p className="fineprint">Your browser could not draw this file, so LibreOffice is rendering it instead… the pages appear here when it finishes.</p>
         : docPages.length===0
         ? <p className="fineprint">This document could not be rendered, so there are no pages to show: {docPreview.unavailable_reason||'the renderer is unavailable'}. Spacing, indent and alignment are still read from the file itself, so a diagnosis is unaffected.</p>
         : null}</div>}
@@ -381,7 +510,7 @@ export default function App(){
  /* A real document opened against the backend is live work. If the backend becomes
   * unreachable it is held and reported, never replaced by the bundled sample. */
  const liveWork=Boolean(doc||job);
- const leaveLiveWork=()=>{abort.current?.abort();previewFor.current=null;setDocPreview(null);setDoc(null);setDocParagraphs([]);setLiveSelected(null);setJob(null);setApiError(null);sample();};
+ const leaveLiveWork=()=>{abort.current?.abort();scanStop.current=true;scanAbort.current?.abort();setScan(null);setWholeDoc(false);openDocId.current=null;setDocSource(null);setDocSourceFailed(null);previewFor.current=null;setDocPreview(null);setDoc(null);setDocParagraphs([]);setLiveSelected(null);setJob(null);setApiError(null);sample();};
 
  let page;
  if(connected&&LIVE_ROUTES.includes(route)&&(!demoChosen||route==='upload'))page=livePage();

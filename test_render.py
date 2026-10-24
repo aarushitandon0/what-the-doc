@@ -8,6 +8,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from unittest.mock import patch
 
@@ -31,6 +32,17 @@ if fail_on != 'all' and fail_on != phase:
     mode = 'valid'
 target = Path(arguments[arguments.index('--outdir') + 1]) / (source.stem + '.pdf')
 if mode == 'timeout':
+    time.sleep(10)
+elif mode == 'timeout_orphan':
+    # Like soffice.exe on Windows: the launcher is killed at the timeout, but the
+    # worker it started keeps the half-written PDF open in the staging directory.
+    import subprocess
+    worker = ('import sys, time; handle = open(sys.argv[1], "wb"); '
+              'handle.write(b"%PDF-1.4 partial"); handle.flush(); '
+              'time.sleep(2.5); handle.close()')
+    subprocess.Popen([sys.executable, '-c', worker, str(target)],
+                     stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                     stderr=subprocess.DEVNULL)
     time.sleep(10)
 elif mode == 'missing':
     pass
@@ -111,6 +123,17 @@ class RendererBoundaryTests(unittest.TestCase):
         with self.assertRaisesRegex(render.RenderFailed, 'exceeded 0.2s and was stopped') as caught:
             self.convert('timeout', timeout=0.2)
         self.assertIsInstance(caught.exception.__cause__, subprocess.TimeoutExpired)
+
+    def test_a_timeout_stays_a_render_failure_when_a_stray_worker_holds_the_output(self):
+        # Measured live: a CPU-starved render hit the timeout, the worker LibreOffice
+        # had started kept writing into the staging directory, and deleting that
+        # directory raised OSError ("The directory is not empty"), which replaced the
+        # real reason and surfaced as an internal error. The timeout must stay the
+        # reported failure, and nothing may be published.
+        with self.assertRaisesRegex(render.RenderFailed, 'exceeded 0.5s and was stopped'):
+            self.convert('timeout_orphan', timeout=0.5)
+        self.assertFalse((self.output / 'sample.pdf').exists())
+        time.sleep(3)  # let the stray worker release its file before cleanup
 
     def test_successful_exit_without_output_is_a_failure(self):
         with self.assertRaisesRegex(render.RenderFailed, 'No PDF produced'):

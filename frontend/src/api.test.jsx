@@ -4,6 +4,19 @@ import {render,screen,fireEvent,act,waitFor,within} from '@testing-library/react
 import App from './App';
 import * as api from './api';
 
+/* docx-preview draws into the DOM with layout jsdom does not have. This stand-in keeps
+ * its contract: it draws a page for a real .docx (a ZIP, so it starts with PK) and
+ * rejects anything else, which is what sends the app to the LibreOffice fallback. It
+ * also plants a script link, which the app must disarm. */
+vi.mock('docx-preview',()=>({renderAsync:vi.fn(async(source,el)=>{
+ // jsdom's Blob has no text(), so the bytes are read the older way.
+ const text=await new Promise((resolve,reject)=>{const r=new FileReader();r.onload=()=>resolve(r.result);r.onerror=()=>reject(r.error);r.readAsText(source);});
+ if(!text.startsWith('PK'))throw new Error('not a zip file');
+ const page=document.createElement('section');page.className='docx';page.textContent='Drawn: '+text.slice(3);
+ const link=document.createElement('a');link.setAttribute('href','javascript:alert(1)');link.textContent='planted link';page.append(link);
+ el.append(page);
+})}));
+
 /* A router over fetch: every response here is shaped like API.md, so a change in the
  * contract shows up as a failing test rather than as a surprise in the browser. */
 const HEALTH_LIVE={service:'what-the-doc',model_runtime:{configured_model:'gemma4:e2b',available:true,model_installed:true,reason:null},live_diagnosis_available:true,renderer:{available:true,binary:'soffice.exe'},fixture_mode_allowed:false};
@@ -82,6 +95,7 @@ function mockApi(overrides={}){
   if(!handler)return {ok:false,status:404,json:async()=>({error_code:'not_found',detail:key})};
   const result=handler(options);
   if(result?.__status)return {ok:false,status:result.__status,json:async()=>result.body};
+  if(result instanceof Blob)return {ok:true,status:200,blob:async()=>result};
   return {ok:true,status:200,json:async()=>result};
  });
  vi.stubGlobal('fetch',fetchMock);
@@ -89,6 +103,13 @@ function mockApi(overrides={}){
 }
 
 afterEach(()=>{vi.unstubAllGlobals();});
+
+/* Nothing is pre-selected any more: each test picks the paragraph it means, exactly
+ * as a person has to. */
+async function pick(name=/Methodology/){
+ const outline=await waitFor(()=>{const el=document.querySelector('.outline-scroll');if(!el)throw new Error('no outline yet');return el;});
+ await act(async()=>{fireEvent.click(within(outline).getByRole('button',{name}));});
+}
 
 describe('api client',()=>{
  beforeEach(()=>{mockApi();});
@@ -124,7 +145,7 @@ describe('connected workspace',()=>{
   render(<App/>);
   act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
   await screen.findByText(/CONNECTED/);
-  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/})); await pick();
 
   // paragraphs come from the backend, and an unset property is never shown as 0
   expect((await screen.findAllByText('Methodology')).length).toBeGreaterThan(0);
@@ -163,7 +184,7 @@ describe('connected workspace',()=>{
   });
   render(<App/>);
   act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
-  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/})); await pick();
   fireEvent.click(await screen.findByRole('button',{name:/Diagnose with Gemma/}));
   fireEvent.click(await screen.findByRole('link',{name:/Review the change/}));
   expect(await screen.findByText(/Acceptance checks document structure only/)).toBeInTheDocument();
@@ -237,7 +258,7 @@ describe('explicit breaks',()=>{
   render(<App/>);
   act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
   await screen.findByText(/CONNECTED/);
-  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/})); await pick();
   await screen.findByText(/EXPLICIT BREAKS IN THIS PARAGRAPH/);
   return mock;
  }
@@ -304,7 +325,7 @@ describe('explicit breaks',()=>{
   });
   render(<App/>);
   act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
-  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/})); await pick();
   fireEvent.click(await screen.findByRole('button',{name:/Diagnose with Gemma/}));
   fireEvent.click(await screen.findByRole('link',{name:/Review the change/}));
 
@@ -339,7 +360,7 @@ describe('explicit breaks',()=>{
   });
   render(<App/>);
   act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
-  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/})); await pick();
   fireEvent.click(await screen.findByRole('button',{name:/Diagnose with Gemma/}));
   fireEvent.click(await screen.findByRole('link',{name:/Review the change/}));
   expect(await screen.findByText(/The page count is unchanged/)).toBeInTheDocument();
@@ -358,7 +379,7 @@ describe('explicit breaks',()=>{
   });
   render(<App/>);
   act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
-  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/})); await pick();
   fireEvent.click(await screen.findByRole('button',{name:/Diagnose with Gemma/}));
   expect(await screen.findByText(/That run/)).toBeInTheDocument();
   expect(screen.getByText(/requires a successful rendering/)).toBeInTheDocument();
@@ -409,7 +430,7 @@ describe('the document itself',()=>{
   render(<App/>);
   act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
   await screen.findByText(/CONNECTED/);
-  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/})); await pick();
   await screen.findByText(/IN THIS DOCUMENT/);
   return mock;
  }
@@ -447,38 +468,57 @@ describe('the document itself',()=>{
   expect(screen.getByText(/a diagnosis is unaffected/)).toBeInTheDocument();
  });
 
- it('a failed run says how many times the model was asked, and that nothing changed',async()=>{
-  const failed={...REVIEWABLE,state:'failed',diagnosis:null,proposal:null,preview:null,
-   error_code:'invalid_response',error_detail:'duplicate evidence entry',
-   attempts:3,max_attempts:3,
-   discarded_attempts:[{attempt:1,error_code:'invalid_response',error:'duplicate evidence entry'},
-                       {attempt:2,error_code:'invalid_response',error:'duplicate evidence entry'}]};
-  await openWorkspace({'POST /api/jobs':()=>({...failed,state:'queued'}),
-                       [`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>failed});
-  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
-  expect(await screen.findByText(/That run/)).toBeInTheDocument();
-  expect(await screen.findByText(/asked 3 times of 3/)).toBeInTheDocument();
-  // The server's own reason is kept verbatim: the refusal is the product here.
-  expect(screen.getByText(/Reason recorded: “duplicate evidence entry”/)).toBeInTheDocument();
-  expect(screen.getByText(/Your original document is untouched/)).toBeInTheDocument();
-  // The single-draw hint is not shown when the count already says it was re-asked.
-  expect(screen.queryByText(/often gets the same answer/)).not.toBeInTheDocument();
- },20000);
-
- it('a single refused answer suggests rephrasing, and claims only that the original is untouched',async()=>{
+ /* Gemma answered and the safety checks threw the answer away. That is the checks
+  * working, so it must not read as a crash, and the server's own reason stays
+  * available verbatim. */
+ it('a refused answer reads as "no safe fix found", in plain words, with the reason kept',async()=>{
   const failed={...REVIEWABLE,state:'failed',diagnosis:null,proposal:null,preview:null,
    error_code:'invalid_response',error_detail:'duplicate evidence entry',
    attempts:1,max_attempts:1,discarded_attempts:[{attempt:1,error_code:'invalid_response',error:'duplicate evidence entry'}]};
   await openWorkspace({'POST /api/jobs':()=>({...failed,state:'queued'}),
                        [`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>failed});
   await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
-  expect(await screen.findByText(/That run/)).toBeInTheDocument();
-  expect(screen.getByText(/often gets the same answer/)).toBeInTheDocument();
-  expect(screen.queryByText(/times of/)).not.toBeInTheDocument();
-  // A failed run may have built a candidate, so "nothing was written" is never claimed.
+  expect(await screen.findByRole('heading',{name:/No safe fix\s*found\./})).toBeInTheDocument();
+  expect(screen.queryByText(/That run/)).not.toBeInTheDocument();
+  expect(screen.getByText(/listed the same piece of evidence twice/)).toBeInTheDocument();
+  expect(screen.getByText(/Your original document is untouched/)).toBeInTheDocument();
+  // The verbatim record is still there, folded under "Technical details".
+  expect(screen.getByText('Technical details')).toBeInTheDocument();
+  expect(screen.getByText(/Reason recorded: “duplicate evidence entry”/)).toBeInTheDocument();
+  // Nothing to approve.
+  expect(screen.queryByRole('button',{name:/Accept/})).not.toBeInTheDocument();
+  // "Nothing was written" is never claimed: a failed run may have built a candidate.
   expect(screen.queryByText(/Nothing was written/)).not.toBeInTheDocument();
-  expect(screen.queryByText(/validator refused it/)).not.toBeInTheDocument();
  },20000);
+
+ it('an ineffective suggestion is explained as changing nothing on the page',async()=>{
+  const failed={...REVIEWABLE,state:'failed',diagnosis:null,proposal:null,preview:null,
+   error_code:'invalid_operation',error_detail:'Ineffective operation: every proposed operation writes a value this paragraph already resolves to, so nothing would change on the page. paragraph 0 page_break_before -> False is already off (no layer sets it)'};
+  await openWorkspace({'POST /api/jobs':()=>({...failed,state:'queued'}),
+                       [`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>failed});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
+  expect(await screen.findByRole('heading',{name:/No safe fix\s*found\./})).toBeInTheDocument();
+  expect(screen.getByText(/would not change anything on the page/)).toBeInTheDocument();
+ },20000);
+
+ it('a failure that is not a refused answer still says the run failed',async()=>{
+  const failed={...REVIEWABLE,state:'failed',diagnosis:null,proposal:null,preview:null,
+   error_code:'model_timeout',error_detail:'no answer within 600 s'};
+  await openWorkspace({'POST /api/jobs':()=>({...failed,state:'queued'}),
+                       [`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>failed});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
+  expect(await screen.findByText(/That run/)).toBeInTheDocument();
+  expect(screen.getByText(/did not answer in time/)).toBeInTheDocument();
+  expect(screen.queryByText(/No safe fix/)).not.toBeInTheDocument();
+ },20000);
+
+ it('says nothing about a progress bar while Gemma runs',async()=>{
+  await openWorkspace({[`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>({...REVIEWABLE,state:'running',diagnosis:null,proposal:null,preview:null})});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
+  expect(await screen.findByText(/usually takes 1–3 minutes/)).toBeInTheDocument();
+  expect(screen.queryByText(/progress bar/i)).not.toBeInTheDocument();
+ },20000);
+
 
  const route=(r)=>act(()=>{window.location.hash=r;window.dispatchEvent(new HashChangeEvent('hashchange'));});
 
@@ -540,4 +580,96 @@ describe('the document itself',()=>{
   const pages=screen.getAllByRole('img',{name:/Your document page/});
   expect(pages.map(p=>p.getAttribute('src'))).toEqual([`/api/documents/${OTHER}/preview/0`]);
  },20000);
+});
+
+/* The document appears the moment it opens: the browser draws the file itself, and
+ * LibreOffice (tens of seconds on a CPU) is only the fallback. */
+describe('instant preview',()=>{
+ const open=async(overrides={})=>{
+  const mock=mockApi(overrides);
+  render(<App/>);
+  act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
+  await screen.findByText(/CONNECTED/);
+  return mock;
+ };
+ it('draws the sample from its own bytes without asking LibreOffice, and disarms script links',async()=>{
+  const {calls}=await open({[`GET /api/documents/${DOCUMENT.document_id}/original`]:()=>new Blob(['PK the sample'])});
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  expect(await screen.findByText(/Drawn: the sample/)).toBeInTheDocument();
+  expect(screen.getByText('YOUR DOCUMENT · INSTANT PREVIEW')).toBeInTheDocument();
+  expect(screen.getByText(/drawn instantly by your browser/)).toBeInTheDocument();
+  expect(calls.some(c=>c.key.endsWith('/preview'))).toBe(false);
+  expect(screen.getByText('planted link')).not.toHaveAttribute('href');
+ });
+ it('draws an uploaded file from memory, with no round trip for its bytes',async()=>{
+  const {calls}=await open();
+  fireEvent.change(await screen.findByLabelText('Choose a Word document'),{target:{files:[new File(['PK my report'],'mine.docx')]}});
+  expect(await screen.findByText(/Drawn: my report/)).toBeInTheDocument();
+  expect(calls.some(c=>c.key.endsWith('/original'))).toBe(false);
+  expect(calls.some(c=>c.key.endsWith('/preview'))).toBe(false);
+ });
+ it('falls back to the LibreOffice pages when the browser cannot draw the file',async()=>{
+  await open({[`GET /api/documents/${DOCUMENT.document_id}/original`]:()=>new Blob(['not a docx'])});
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  const pages=await screen.findAllByRole('img',{name:/Your document page/});
+  expect(pages[0]).toHaveAttribute('src',DOCUMENT_PREVIEW.urls[0]);
+  expect(screen.getByText(/RENDERED BY LIBREOFFICE/)).toBeInTheDocument();
+ });
+});
+
+/* Nothing is chosen for the person: a complaint goes to the paragraph they picked, or
+ * to every paragraph when they ask for the whole document. */
+describe('choosing what to check',()=>{
+ const open=async(overrides={})=>{
+  const mock=mockApi(overrides);
+  render(<App/>);
+  act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
+  await screen.findByText(/CONNECTED/);
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  await screen.findByText(/IN THIS DOCUMENT/);
+  return mock;
+ };
+ it('selects no paragraph by default and says what to do first',async()=>{
+  await open();
+  expect(await screen.findByText(/First, click the paragraph that looks wrong/)).toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'Pick a paragraph first'})).toBeDisabled();
+  expect(screen.queryByRole('button',{name:/Diagnose with Gemma/})).not.toBeInTheDocument();
+  await pick();
+  expect(screen.getByRole('button',{name:/Diagnose with Gemma/})).toBeEnabled();
+  expect(screen.queryByText(/First, click the paragraph/)).not.toBeInTheDocument();
+ });
+
+ it('checks every paragraph one after another, and each result opens on its own',async()=>{
+  const JOB={1:'a1abcdef0123',2:'b2abcdef0123'};
+  const outcome={
+   [JOB[1]]:{...REVIEWABLE,job_id:JOB[1],paragraph_id:1},
+   [JOB[2]]:{...REVIEWABLE,job_id:JOB[2],paragraph_id:2,state:'failed',diagnosis:null,proposal:null,preview:null,error_code:'invalid_response',error_detail:'duplicate evidence entry'},
+  };
+  let inFlight=0,maxInFlight=0;
+  const {calls}=await open({
+   'POST /api/jobs':(options)=>{const body=JSON.parse(options.body);inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);return {...outcome[JOB[body.paragraph_id]],state:'queued'};},
+   [`GET /api/jobs/${JOB[1]}`]:()=>{inFlight=0;return outcome[JOB[1]];},
+   [`GET /api/jobs/${JOB[2]}`]:()=>{inFlight=0;return outcome[JOB[2]];},
+  });
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Check every paragraph/}));});
+  expect(screen.getByRole('button',{name:/Check every paragraph/})).toHaveAttribute('aria-pressed','true');
+  expect(screen.getByText(/Gemma checks the 2 paragraphs with text one at a time/)).toBeInTheDocument();
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Check all 2 paragraphs/}));});
+  expect(await screen.findByText(/2 of 2 checked/,{},{timeout:10000})).toBeInTheDocument();
+  // One job per paragraph, the same request a single paragraph sends, never two at once.
+  const posted=calls.filter(c=>c.key==='POST /api/jobs').map(c=>JSON.parse(c.options.body));
+  expect(posted.map(b=>b.paragraph_id)).toEqual([1,2]);
+  posted.forEach(b=>expect(b).toMatchObject({document_id:DOCUMENT.document_id,expected_source_sha256:'ca278f'}));
+  expect(maxInFlight).toBe(1);
+  expect(screen.getByRole('heading',{name:/1 fix\s*to review\./})).toBeInTheDocument();
+  expect(screen.getByText('Fix ready to review')).toBeInTheDocument();
+  expect(screen.getByText('No safe fix found')).toBeInTheDocument();
+  // Opening a result shows that paragraph's own review, with a way back to the list.
+  await act(async()=>{fireEvent.click(screen.getByText('Fix ready to review').closest('button'));});
+  expect(await screen.findByRole('heading',{name:/A candidate\s*to review\./})).toBeInTheDocument();
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/All paragraphs/}));});
+  expect(screen.getByText('No safe fix found')).toBeInTheDocument();
+  await act(async()=>{fireEvent.click(screen.getByText('No safe fix found').closest('button'));});
+  expect(await screen.findByRole('heading',{name:/No safe fix\s*found\./})).toBeInTheDocument();
+ },30000);
 });

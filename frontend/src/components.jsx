@@ -1,4 +1,4 @@
-import React from 'react';
+import React,{useEffect,useRef,useState} from 'react';
 import {ArrowUpRight, FileText, SlidersHorizontal, Check, Upload, ScanLine, AlertCircle, Wifi, WifiOff, Loader} from 'lucide-react';
 import {resolveUrl, errorText, breakLabel} from './api';
 import {paragraphs,steps} from './data';
@@ -68,7 +68,7 @@ export function ApiErrorNote({error,onDismiss}){
 export function JobProgress({job,elapsed,onStopWatching}){
  return <><ModeBadge job={job}/><span className="eyebrow">{job?.state==='queued'?'QUEUED':'RUNNING'}</span><h2>{job?.is_live_model_answer?<>Gemma is<br/>reading it.</>:<>Checking an<br/>injected fixture.</>}</h2><div className="spinner"/>
   <p role="status">Elapsed {Math.floor(elapsed/60)}m {String(elapsed%60).padStart(2,'0')}s</p>
-  <p className="fineprint">{job?.is_live_model_answer?'CPU inference can take several minutes. The runtime reports no progress, so there is no progress bar to show.':'This developer-injected diagnosis does not contact a model. No model inference is being measured.'}</p>
+  <p className="fineprint">{job?.is_live_model_answer?'This usually takes 1–3 minutes on this computer.':'This developer-injected diagnosis does not contact a model. No model inference is being measured.'}</p>
   <Button secondary onClick={onStopWatching}>Stop watching</Button>
   <p className="fineprint">The job keeps running on the server; this only stops polling.</p></>;
 }
@@ -208,4 +208,46 @@ export class ScreenFailed extends React.Component{
    <p>Nothing was accepted or downloaded because of it. Your original file is never written to, and a job you started is still held by the local service.</p>
    <div className="component-row"><Button onClick={()=>{window.location.hash='history';window.location.reload();}}>Reload at My documents</Button></div></div></main>;
  }
+}
+
+/* The uploaded file drawn by the browser itself (docx-preview), so the document is on
+ * screen the moment it opens. LibreOffice takes tens of seconds on a CPU, so it is kept
+ * for the before/after comparison, where both sides must come from one renderer. The
+ * library is loaded on first use so the rest of the app does not wait for it. Links a
+ * document carries are reduced to plain text unless they are ordinary web or mail
+ * links, so nothing in a file can run script from this page. */
+const SAFE_LINK=/^(https?:|mailto:|#)/i;
+export function DocxPages({source,zoom=100,onFailed}){
+ const host=useRef(null);
+ const [state,setState]=useState('drawing');
+ const failed=useRef(onFailed);failed.current=onFailed;
+ useEffect(()=>{
+  const el=host.current;
+  if(!el||!source)return undefined;
+  let cancelled=false;
+  setState('drawing');el.replaceChildren();
+  import('docx-preview')
+   .then(({renderAsync})=>renderAsync(source,el,undefined,{className:'docx',inWrapper:true,breakPages:true,ignoreLastRenderedPageBreak:true,renderHeaders:true,renderFooters:true,renderFootnotes:true,renderEndnotes:true,useBase64URL:true,experimental:false}))
+   .then(()=>{
+    if(cancelled)return;
+    el.querySelectorAll('a[href]').forEach(a=>{if(!SAFE_LINK.test(a.getAttribute('href')||''))a.removeAttribute('href');else if(!a.getAttribute('href').startsWith('#')){a.target='_blank';a.rel='noopener noreferrer';}});
+    if(!el.querySelector('section'))throw new Error('the file produced no pages');
+    setState('ready');
+   })
+   .catch(error=>{if(cancelled)return;el.replaceChildren();setState('failed');failed.current?.(String(error?.message||error));});
+  return()=>{cancelled=true;};
+ },[source]);
+ return <div className="docx-pages" aria-label="Your document" aria-busy={state==='drawing'}>
+  {state==='drawing'&&<p className="fineprint">Opening your document…</p>}
+  <div ref={host} className="docx-host" style={{zoom:zoom/100}}/></div>;
+}
+
+/* The server's own record of a refused answer, kept verbatim for anyone who wants it,
+ * folded away so the plain explanation above it is what a person reads first. */
+export function TechDetails({job}){
+ if(!job?.error_code)return null;
+ return <details className="tech-details"><summary>Technical details</summary>
+  <p>Code: {job.error_code}</p>
+  {job.error_detail&&<p>Reason recorded: “{job.error_detail}”.</p>}
+  {job.attempts>1&&<p>Gemma was asked {job.attempts} times{job.max_attempts?` of ${job.max_attempts}`:''} and every answer was refused.</p>}</details>;
 }
