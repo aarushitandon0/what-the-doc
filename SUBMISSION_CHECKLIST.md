@@ -23,6 +23,11 @@ second column is the one that matters: a claim without a line in
 | The frontend builds and its tests pass | `npm run build`, `npm test` — see `frontend/docs/VERIFICATION.md` |
 | Microsoft Word opens every candidate and agrees with LibreOffice on all eight page counts, with word counts unchanged | `work/session2/word-check.json`; `submission/EVIDENCE_TABLE.md` section 5 |
 | A real browser defect was found and fixed by the browser run | `frontend/docs/VERIFICATION.md`; the results view crashed on any non-paragraph operation |
+| The live model is measured **repeatedly**, three runs per case, with the two case sets scored separately and every failure categorised | `TEST_RESULTS.md` section 18; `work/eval-final2/live-eval.json`; `submission/EVIDENCE_TABLE.md` section 4b |
+| On the current code the model proposes the selected break removal 3/3 runs and the supported section change 3/3, and abstains on the deliberate section 3/3 | same |
+| A safety gap was found by measurement and closed: the model removed one of two breaks and it reached review 3/3 runs; a removal now requires the person to choose the break | `test_gemma_adapter.AmbiguousBreakTests`; `test_api_breaks`; `EVIDENCE_TABLE.md` 4c |
+| A proposal cannot change a property it did not cite, and writing `False` to an on/off property nothing sets is refused as ineffective | `test_diagnosis`; `test_gemma_adapter.EffectiveNoOpTests`; `work/replay_reached_review.py` |
+| Six wrong proposals reached the review screen across 45 graded runs, none was applied, and the remaining stop is human review | `TEST_RESULTS.md` 18.7 — disclosed, not omitted |
 
 ## Not claimable
 
@@ -33,7 +38,8 @@ second column is the one that matters: a claim without a line in
 | "Making a section continuous removes the page break" | Page geometry, columns and keep-with-next can still force pagination. | "Asks the section to continue on the same page, and reports the real before and after page counts." |
 | "Zero cost" | Local inference costs electricity and hardware; a hosted version would cost real money. | "Runs locally with no per-request API fee." |
 | "Sentry integrated and verified" | No real DSN is configured; nothing has been sent to sentry.io or seen in a dashboard. | "Backend and browser error events and backend traces are instrumented, with the privacy boundary verified at the transport and over the real HTTP transports to a local capture server. Hosted verification is pending a DSN." |
-| "Gemma diagnoses the new section repair" | Measured 23 October, single runs on synthetic fixtures: with constrained decoding `gemma4:e2b` proposed the correct section and page-break repairs and abstained correctly on the odd-page section, but missed `needs_clarification` once and had one `invalid_response` (repeated evidence). | "On the recorded synthetic cases, the live model proposed the supported break and section repairs, which reached review and a verified download in a real browser. Not a benchmark — see `TEST_RESULTS.md` section 17." |
+| "Gemma diagnoses the new section repair" (as a general capability) | Measured on synthetic fixtures only, three runs per case: `gemma4:e2b` proposed the selected break removal 3/3 and the supported section change 3/3, but passed only 7 of 30 ten-case runs, never once returned `needs_clarification`, and six wrong proposals reached review. One machine, one model build, and temperature 0 is not deterministic here. | "On these synthetic cases, run three times each, the live model proposed the supported break and section repairs 3 of 3 times, and those reached review and a verified download in a real browser. It is not a benchmark, and the same measurement records what it gets wrong — see `TEST_RESULTS.md` section 18." |
+| "The model asks when a request is ambiguous" | It never did, in any graded run. The *system* refuses to act instead. | "When two breaks share a paragraph and the person has not chosen one, the system accepts no removal at all. The model still does not ask the question itself, which is recorded as an open failure." |
 | "Fine-tuned with Tinker" | Nothing was trained. | "Recorded as an unfinished experiment with its design and spending gate written down." |
 | "Deployed" | Nothing is published. | "The static demo is configured and ready to deploy; the local application is what runs." |
 | "Sandboxed renderer" | A unique profile directory and a timeout. Docker would not change that. | "Isolated by a private profile and a timeout. Real isolation is listed as unbuilt work." |
@@ -56,8 +62,8 @@ Claim only what was actually performed:
 
 ## Before publishing anything
 
-- [ ] Decide the licence. There is **no `LICENSE` file** in this repository; source
-      published without one leaves its terms undefined.
+- [x] Licence decided: **MIT**, `LICENSE` at the repository root (committed in
+      `d4b906f`).
 - [ ] `git status --short` and review every file that would be added.
 - [ ] Confirm no private document, model weight, `.env`, DSN or API key is tracked:
       `git ls-files | Select-String '\.docx$|\.gguf$|\.msi$|\.env$'` — the only
@@ -69,7 +75,7 @@ Claim only what was actually performed:
 
 ## Current state of this repository
 
-- Not initialised for publication beyond the existing single local commit, and
-  **not pushed anywhere**.
+- Committed locally only, on `main`, and **not pushed anywhere**. No remote is
+  configured for publication.
 - No hosting purchased, no Render service created.
 - The local API has never been bound to anything but `127.0.0.1`.

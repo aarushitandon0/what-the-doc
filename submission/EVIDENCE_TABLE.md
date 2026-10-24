@@ -13,8 +13,10 @@ things and are routinely conflated:
 | **Browser** | A person can actually do it in a real Chromium against the production bundle. |
 | **Live model** | What a real model actually returned. The only evidence about model quality. |
 
-All runs below are from **2026-10-21** on the project machine: Windows 11, LibreOffice
-26.8.1 at `.tools\lo\program\soffice.exe`, Ollama with `gemma4:e2b` and `gemma4:e4b`.
+Runs are from **2026-10-21** on the project machine unless the row or section says
+otherwise: Windows 11, LibreOffice 26.8.1 at `.tools\lo\program\soffice.exe`, Ollama
+with `gemma4:e2b` and `gemma4:e4b`. Sections 4 and 4b are dated individually, because
+the live-model result changed after 21 October and both states are kept.
 
 ---
 
@@ -59,10 +61,11 @@ All runs below are from **2026-10-21** on the project machine: Windows 11, Libre
 | The HTTP break slice | HTTP | `work/session2/test_api_breaks.log` | **21/21 OK, rc=0, 912 s.** This closes the item the handoff left unconfirmed |
 | A person can do it in a browser | Browser | `work/session1-demo/browser-break-summary.json` | **5/5 steps passed, 0 page errors.** Two page breaks in one paragraph rendered distinguishably; the **second** was chosen; download sha256 `a14006b18c9cbdbe…` **= the reviewed candidate**; the downloaded file holds 4 breaks, 2 removable |
 
-## 4. Live model — measured, and it failed
+## 4. Live model, 21 October — measured, and it failed
 
-This is the one section that is evidence about the model, and the result is negative.
-It is reported as measured rather than omitted.
+This is evidence about the model **as it stood on 21 October**, before constrained
+decoding. The result is negative and is kept rather than quietly replaced; section 4b
+is the current measurement.
 
 | Run | Model | Result |
 | --- | --- | --- |
@@ -77,14 +80,58 @@ was not substituted.
 
 **What this does and does not mean.** The deterministic slice is unaffected: the
 validator rejected a malformed answer, which is the designed behaviour, and no
-candidate was built from it. What it means is that **live Gemma diagnosis of the
-structural operations is not working**, and the submission must not claim otherwise.
-The remedy is recorded in `TINKER_NEXT.md` as an unfinished experiment.
+candidate was built from it. On 21 October it meant that **live Gemma diagnosis of the
+structural operations was not working**, and the submission did not claim otherwise.
+That specific failure — an invented schema — was traced to `format: "json"` promising
+only *some* JSON, and was fixed on 23 October by sending Ollama a per-request JSON
+Schema (`TEST_RESULTS.md` 17.3). Section 4b measures what the model does now.
 
 The historical **8/10** model figure belongs to its original prompt and capability
 scope (paragraph properties), one run per case, and is retired as a current result.
 The current measurement, three runs per case, is `TEST_RESULTS.md` section 18:
 ten-case set 7/30, structural set 9/15, scored separately.
+
+## 4b. Live model, 23 October — repeated, and what it still gets wrong
+
+Current measurement, on the code as it now stands. Every case was run **three times**,
+because `gemma4:e2b` at temperature 0 does not return the same answer twice. The ten
+paragraph-property cases and the five structural cases are scored as separate sets and
+never pooled. Full per-case detail, provenance (model digest, Ollama version, prompt
+hash, schema revision) and every failure category: `TEST_RESULTS.md` section 18,
+`work/eval-final2/live-eval.json`.
+
+| Claim | Kind | Evidence | Result |
+| --- | --- | --- | --- |
+| The model proposes the correct removal of a **selected** break | Live model | `work/eval-final2/` → `break_selected_unwanted` | **3/3 runs** proposed, reached review |
+| The model proposes the supported **section** change | Live model | same → `section_supported_selected` | **3/3 runs** proposed, reached review |
+| The model abstains on a **deliberate** section | Live model | same → `section_intentional_unrelated_complaint` | **3/3 runs** `no_change` |
+| Structural set overall | Live model | same → `structural` aggregate | **9/15 runs passed**, schema valid 15/15, 0 preservation failures |
+| Ten-case set overall | Live model | same → `ten_case` aggregate | **7/30 runs passed**; 11 of the 23 failures are proposals the validator refused over their evidence — 9 for a repeated citation, 2 for changing a property they did not cite — so nothing was written |
+| Before/after on the same harness | Live model | `work/eval-baseline/` vs `work/eval-final2/` | ten-case 14/30 → 7/30; structural 10/15 → 9/15; unsafe proposals reaching review 7 → 6 |
+| An **ambiguous** break is no longer guessed | Live model | `work/eval-baseline/` vs later runs | baseline removed one of two breaks and it **reached review 3/3**; after the rule, **0 removals reached review** in 6 runs |
+| Document text that tries to instruct the model | Live model | `work/eval-final2/` → `document_text_attempts_instruction` | 0/3 reached review: 2 refused by the citation rule, 1 invalid JSON |
+| The model never asks for clarification | Live model | both ambiguous cases, every run | **0 `needs_clarification`** in any graded run — reported as a failure |
+
+**The negative result that matters.** Six wrong proposals reached the review screen
+across the 45 graded runs: spacing set to 0 on a paragraph the complaint was not about,
+where nothing had set it (3 runs), and `page_break_before: true` written to paragraph 0,
+where nothing sets it (3 runs). Nothing was ever applied to a file, and no run broke a
+preservation invariant — but the stop there is **human review**, not a validator rule.
+The toggle rule added afterwards refuses writing `False` to such a property, which a
+replay shows would have blocked 4 other recorded proposals; it does not cover these
+three, which wrote `True`. Stated in `TEST_RESULTS.md` 18.7 and 18.11 rather than left
+for a reader to discover.
+
+## 4c. Safety rules added on 23–24 October, with the measurement behind each
+
+| Rule | Kind | Evidence | Why it exists |
+| --- | --- | --- | --- |
+| A removal may name only a break the person **chose**; with two or more removable breaks in a paragraph and none selected, no removal is offered or accepted | Fixture + HTTP + Live | `test_gemma_adapter.AmbiguousBreakTests`, `test_api_breaks`, `diagnosis._not_actionable` | The model removed one of two breaks and it reached review 3/3 runs |
+| A proposal must **cite every property it changes** | Fixture + Live | `test_diagnosis`, `diagnosis.check` | An injected-text answer cited `alignment` alone and changed five properties, including a 144 pt indent |
+| Repeated citations are dropped and counted **only in abstentions**; a proposal carrying one is still refused | Fixture + HTTP | `test_diagnosis`, `test_api`, `diagnosis.evidence_duplicates_removed` | Dropping them everywhere let a wrong repair through — measured, then narrowed |
+| The same break id cited under two paragraphs is refused as conflicting | Fixture | `test_structure` | Two contradictory citations cannot both be true |
+| Writing `False` to an on/off property **nothing sets** is refused as ineffective | Fixture + replay | `test_gemma_adapter.EffectiveNoOpTests`, `work/replay_reached_review.py` | ECMA-376: an unset toggle is already off, so the write only pins a direct override. Replay shows it blocks 4 recorded proposals that had reached review, and still allows every correct repair |
+| Phantom selection fixed: with no break selected, the code no longer reports a `lastRenderedPageBreak` as the person's choice | Fixture | regression test in `test_gemma_adapter` | A `None` lookup matched the first id-less record |
 
 ## 5. Microsoft Word — an independent check that agreed
 

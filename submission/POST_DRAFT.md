@@ -154,12 +154,27 @@ Working: three repair families, each demonstrated on real LibreOffice renders an
 driven end to end in real Chromium, including the downloaded `.docx` hashing to the
 candidate that was reviewed.
 
-Not working: live model diagnosis of the two structural operations, as measured above.
+Measured, repeatedly, and reported as measured: on the current code, with each case
+run three times against `gemma4:e2b`, the model proposes the correct repair for the
+selected break 3 of 3 runs and for the supported section 3 of 3, and abstains correctly
+on the deliberate section 3 of 3. On the ten paragraph-property cases it passed 7 of 30
+runs. Eleven of those twenty-three failures are proposals the validator refused over
+their evidence — nine for repeating a citation, two for changing a property they never
+cited — so nothing was written. At temperature 0 this model does not give
+the same answer twice, which is why nothing here rests on a single run. Full figures,
+with denominators and every category of failure, are in `TEST_RESULTS.md` section 18.
+
+Still wrong, and worth saying plainly: across those runs six wrong proposals reached the
+review screen — mostly writing a value to a property nothing had set, on a paragraph the
+complaint was not about. None was ever applied; the human review step is what stops
+them, and that is a weaker guarantee than a validator rule. The model also never once
+asked a clarifying question, even where the only correct answer was a question.
 
 Not done: no hosted Sentry verification (instrumented and privacy-tested locally, but
-no DSN, so nothing has been sent). Nothing deployed. Nothing fine-tuned. No candidate
-has been opened in Microsoft Word — every render is LibreOffice, which approximates
-Word and is not Word.
+no DSN, so nothing has been sent). Nothing deployed. Nothing fine-tuned. Previews in
+the product are LibreOffice, which approximates Word and is not Word; as a separate
+check, eight originals and their candidates were opened in real Microsoft Word, which
+agreed on every page count with word counts unchanged (`work/session2/word-check.json`).
 
 Not promised: it does not fix any Word document, it does not preserve everything, and
 it does not guarantee a page disappears.
