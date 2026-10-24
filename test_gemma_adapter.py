@@ -830,5 +830,146 @@ class AmbiguousBreakTests(unittest.TestCase):
         self.assertEqual(found['operations'], [])
 
 
+class ResampleTests(unittest.TestCase):
+    """The re-sampling loop: shipped disabled, kept correct.
+
+    `gemma4:e2b` sometimes repeats an evidence entry because Ollama's grammar path
+    does not enforce `uniqueItems` (TEST_RESULTS.md section 18.5). Re-sampling the
+    identical request was added to absorb that, but the live failing case gave three
+    identical draws (section 18.12), so it ships with a budget of 1. Tests that
+    exercise the loop patch the budget to 3. Nothing about what counts as a valid
+    answer changes either way: each draw faces the same `diagnosis.check`, and only
+    `invalid_response` is ever redrawn.
+    """
+
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.source = Path(self.tmp.name)/'sample.docx'
+        fixtures.build(self.source)
+        self.hash = engine.signature(self.source)
+        self.selected = fixtures.FAULT_IDS['excessive_space_before']
+        os.environ['GEMMA_MODEL'] = 'gemma4:e2b'
+        self.addCleanup(os.environ.pop, 'GEMMA_MODEL', None)
+
+    def answer(self, **overrides):
+        cited = {'paragraph_id': self.selected, 'field': 'space_before_pt'}
+        body = {'status': 'proposed', 'explanation': 'Too much space above.',
+                'evidence': [dict(cited)], 'source_sha256': self.hash,
+                'operations': [{'paragraph_id': self.selected,
+                                'field': 'space_before_pt', 'value': 12}]}
+        body.update(overrides)
+        return body
+
+    def repeated(self):
+        """The exact shape measured live: one citation sent twice."""
+        cited = {'paragraph_id': self.selected, 'field': 'space_before_pt'}
+        return self.answer(evidence=[dict(cited), dict(cited)])
+
+    def replies(self, *bodies):
+        """Serve one canned reply per call, recording how many were drawn."""
+        drawn = []
+
+        def fake_urlopen(request, timeout=None):
+            body = bodies[min(len(drawn), len(bodies) - 1)]
+            drawn.append(body)
+            reply = {'model': 'gemma4:e2b',
+                     'message': {'content': json.dumps(body)}}
+            return io.BytesIO(json.dumps(reply).encode())
+
+        return fake_urlopen, drawn
+
+    def test_resampling_ships_disabled(self):
+        """Pinned: three live draws of the failing case were identical
+        (TEST_RESULTS.md section 18.12), so a redraw only lengthened the wait."""
+        self.assertEqual(gemma_adapter.DIAGNOSIS_ATTEMPTS, 1)
+
+    def test_with_resampling_disabled_a_repeat_fails_after_one_draw(self):
+        fake, drawn = self.replies(self.repeated(), self.answer())
+        with patch.object(gemma_adapter.urllib.request, 'urlopen', fake):
+            with self.assertRaises(diagnosis.DiagnosisError) as caught:
+                gemma_adapter.diagnose(
+                    self.source, 'There is too much space above this heading.',
+                    self.selected)
+        self.assertEqual(caught.exception.code, diagnosis.INVALID_RESPONSE)
+        self.assertIn('duplicate evidence entry', caught.exception.message)
+        self.assertEqual(len(drawn), 1)
+        self.assertEqual(caught.exception.attempts, 1)
+        self.assertEqual(caught.exception.max_attempts, 1)
+
+    # The tests below exercise the re-sampling loop itself with a budget of 3, so the
+    # plumbing stays correct if it is ever re-enabled.
+
+    @patch.object(gemma_adapter, 'DIAGNOSIS_ATTEMPTS', 3)
+    def test_a_repeated_citation_is_redrawn_rather_than_failing_the_run(self):
+        fake, drawn = self.replies(self.repeated(), self.answer())
+        with patch.object(gemma_adapter.urllib.request, 'urlopen', fake):
+            found, metadata = gemma_adapter.diagnose(
+                self.source, 'There is too much space above this heading.',
+                self.selected)
+        self.assertEqual(found['status'], 'proposed')
+        self.assertEqual(len(drawn), 2)
+        self.assertEqual(metadata['attempts'], 2)
+        # The discarded draw is reported, not quietly swallowed: a reviewer can see
+        # the model needed more than one try.
+        self.assertEqual([d['error'] for d in metadata['discarded_attempts']],
+                         ['duplicate evidence entry'])
+
+    def test_a_sound_answer_is_still_drawn_exactly_once(self):
+        fake, drawn = self.replies(self.answer())
+        with patch.object(gemma_adapter.urllib.request, 'urlopen', fake):
+            found, metadata = gemma_adapter.diagnose(
+                self.source, 'There is too much space above this heading.',
+                self.selected)
+        self.assertEqual(len(drawn), 1)
+        self.assertEqual(metadata['attempts'], 1)
+        self.assertEqual(metadata['discarded_attempts'], [])
+
+    @patch.object(gemma_adapter, 'DIAGNOSIS_ATTEMPTS', 3)
+    def test_a_model_that_keeps_repeating_still_fails_with_its_own_reason(self):
+        fake, drawn = self.replies(self.repeated())
+        with patch.object(gemma_adapter.urllib.request, 'urlopen', fake):
+            with self.assertRaises(diagnosis.DiagnosisError) as caught:
+                gemma_adapter.diagnose(
+                    self.source, 'There is too much space above this heading.',
+                    self.selected)
+        self.assertEqual(caught.exception.code, diagnosis.INVALID_RESPONSE)
+        self.assertIn('duplicate evidence entry', caught.exception.message)
+        # Bounded: the budget is spent, not retried forever.
+        self.assertEqual(len(drawn), 3)
+
+    @patch.object(gemma_adapter, 'DIAGNOSIS_ATTEMPTS', 3)
+    def test_an_unsafe_proposal_is_not_redrawn_until_it_passes(self):
+        """Re-sampling must not become a search for an answer that gets through.
+
+        A proposal refused for citing nothing is refused for what it *says*, so a
+        redraw is still only a redraw of a malformed answer - the budget is shared
+        with every other `invalid_response`, and when it runs out the refusal stands.
+        """
+        fake, drawn = self.replies(self.answer(evidence=[]))
+        with patch.object(gemma_adapter.urllib.request, 'urlopen', fake):
+            with self.assertRaises(diagnosis.DiagnosisError):
+                gemma_adapter.diagnose(
+                    self.source, 'There is too much space above this heading.',
+                    self.selected)
+        self.assertEqual(len(drawn), 3)
+
+    @patch.object(gemma_adapter, 'DIAGNOSIS_ATTEMPTS', 3)
+    def test_an_unreachable_runtime_is_not_retried(self):
+        """A stable condition is not a bad draw. Redrawing it only wastes the wait."""
+        calls = []
+
+        def fake_urlopen(request, timeout=None):
+            calls.append(1)
+            raise gemma_adapter.urllib.error.URLError('connection refused')
+
+        with patch.object(gemma_adapter.urllib.request, 'urlopen', fake_urlopen):
+            with self.assertRaises(diagnosis.DiagnosisError) as caught:
+                gemma_adapter.diagnose(self.source, 'too much space above',
+                                       self.selected, timeout=2)
+        self.assertEqual(caught.exception.code, diagnosis.MODEL_UNAVAILABLE)
+        self.assertEqual(len(calls), 1)
+
+
 if __name__ == '__main__':
     unittest.main()

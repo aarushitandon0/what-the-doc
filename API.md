@@ -460,10 +460,44 @@ replaced.
   "rendering_satisfied": true,
   "model": "gemma4:e2b",
   "latency_seconds": 73.637,
+  "attempts": 1,
+  "max_attempts": 1,
+  "discarded_attempts": [],
   "decision": null,
   "note": "A candidate exists for review and is NOT accepted. …"
 }
 ```
+
+#### `attempts`, `max_attempts`, `discarded_attempts`
+
+How many times the model was asked before an answer survived validation.
+
+**Re-sampling currently ships disabled: `max_attempts` is 1**, so `attempts` is always 1
+and `discarded_attempts` is empty or holds the single refused draw. The fields stay in
+the response so the budget can be raised without an API change.
+
+Why it exists: Ollama's grammar path does not enforce `uniqueItems`, so `gemma4:e2b`
+sometimes repeats an evidence entry and the validator refuses the answer
+(`TEST_RESULTS.md` section 18.5). Why it is off: the live failing case gave three
+identical draws from the identical request, so redrawing only doubled the wait before
+the same failure (section 18.12).
+
+When the budget is above 1, the adapter re-samples an `invalid_response` (and nothing
+else) up to `max_attempts` times.
+
+**This loosens nothing.** Every draw faces the same `diagnosis.check`, including the
+rule that a *proposed* answer with a repeated citation is refused. A refusal that
+keeps recurring is still a refusal: when the budget is spent the last one stands, with
+its own reason, and `attempts` equals `max_attempts`.
+
+`discarded_attempts` lists what was thrown away, each with its `attempt`,
+`error_code` and `error`. It is reported rather than swallowed because a reviewer
+should be able to see that the answer in front of them was not the model's first, and
+`latency_seconds` covers every draw, so a retried run never looks faster than the wait
+it actually cost.
+
+These fields are present on failed jobs too, where they distinguish a persistent fault
+from one unlucky sample.
 
 ### A job that removes an explicit break
 
@@ -548,6 +582,45 @@ reflows later text, so a large `changed_ratio` means "look at this", not "this i
 wrong".
 
 ## 5. Previews
+
+### The document as uploaded
+
+```
+GET /api/documents/{document_id}/preview
+GET /api/documents/{document_id}/preview/{index}
+```
+
+```json
+{
+  "document_id": "9f1c…",
+  "rendered": true,
+  "page_count": 2,
+  "urls": ["/api/documents/9f1c…/preview/0", "/api/documents/9f1c…/preview/1"],
+  "renderer_available": true,
+  "unavailable_reason": null,
+  "note": "The document as uploaded, rendered by LibreOffice. It approximates Word; it is not Word. Nothing here is a repair."
+}
+```
+
+The original rendered to page images, available **before any job runs**. A formatting
+fault does not exist in a document's text: 48pt of space above a heading and 12pt read
+identically as paragraphs, so `GET /paragraphs` cannot show a reader the thing they
+complained about, and cannot be compared against a repair.
+
+Nothing here is a proposal. These pages are the file that was uploaded, which is never
+written to.
+
+Rendering is **lazy and cached**: the first call pays for LibreOffice and later calls
+do not, so an upload nobody looks at costs nothing. Because the original is immutable,
+one render stays valid for the life of the document.
+
+`rendered: false` with an `unavailable_reason` and a `200` is a normal answer, not an
+error — LibreOffice may be absent or may fail on this file. A diagnosis is unaffected
+either way: spacing, indent and alignment are read from the package itself, not from a
+render. Only a *structural* repair (removing a break, changing a section start) needs
+a render, and the API refuses one without it — see `rendering_required` in section 4.
+
+### Before and after, for one job
 
 ```
 GET /api/jobs/{job_id}/preview/{before|after}/{index}

@@ -66,6 +66,15 @@ export const getBreaks = (documentId, signal) => request(`/api/documents/${id(do
  *  about a section can be altered. */
 export const getSections = (documentId, signal) => request(`/api/documents/${id(documentId)}/sections`, {signal});
 
+/** The uploaded document rendered to page images, before any repair is proposed.
+ *  A formatting fault does not live in a document's text, so extracted paragraphs
+ *  cannot show a reader what they complained about. The server renders lazily and
+ *  caches, so the first call is slow and later ones are not. `rendered: false` with
+ *  an `unavailable_reason` is a normal answer, not an error: without LibreOffice the
+ *  workspace falls back to paragraph text and says so. */
+export const getDocumentPreview = (documentId, signal) =>
+  request(`/api/documents/${id(documentId)}/preview`, {signal});
+
 export const getPeers = (documentId, paragraphId, signal) =>
   request(`/api/documents/${id(documentId)}/paragraphs/${id(paragraphId)}/peers`, {signal});
 
@@ -133,7 +142,7 @@ export const ERROR_TEXT = {
   fixture_mode_disabled: 'This server refuses injected diagnoses.',
   invalid_state: 'That action does not apply to the job in its current state.',
   candidate_integrity_failed: 'The candidate file on disk no longer matches what was reviewed. It was not accepted.',
-  invalid_response: 'The model returned an answer that broke the schema.',
+  invalid_response: 'The model returned an answer the validator refused, so nothing was proposed. Nothing was changed.',
   model_timeout: 'The model did not answer in time.',
   unsupported_formatting: 'The paragraph uses formatting the repair engine will not touch.',
   invalid_operation: 'The proposed operation was refused by the validator.',

@@ -1,6 +1,6 @@
 import React from 'react';
 import {describe,it,expect,vi,beforeEach,afterEach} from 'vitest';
-import {render,screen,fireEvent,act,waitFor} from '@testing-library/react';
+import {render,screen,fireEvent,act,waitFor,within} from '@testing-library/react';
 import App from './App';
 import * as api from './api';
 
@@ -51,6 +51,13 @@ const REVIEWABLE={job_id:'41abcdef0123',document_id:DOCUMENT.document_id,state:'
  candidate:{candidate_sha256:'7d3e',reused:false,accept_requires_candidate_sha256:'7d3e',download_available:false},
  invariants:{original_unmodified:{passed:true,detail:'sha256 unchanged'}},invariant_failures:[],model:'gemma4:e2b',latency_seconds:73.6,decision:null};
 
+/* The uploaded document rendered to pages, shaped like API.md. This is the document
+ * as it stands - not a comparison and not a repair. */
+const DOCUMENT_PREVIEW={document_id:DOCUMENT.document_id,rendered:true,page_count:2,
+ urls:[`/api/documents/${DOCUMENT.document_id}/preview/0`,`/api/documents/${DOCUMENT.document_id}/preview/1`],
+ renderer_available:true,unavailable_reason:null,
+ note:'The document as uploaded, rendered by LibreOffice. It approximates Word; it is not Word.'};
+
 function mockApi(overrides={}){
  const calls=[];
  const routes={
@@ -60,6 +67,7 @@ function mockApi(overrides={}){
   [`GET /api/documents/${DOCUMENT.document_id}/paragraphs`]:()=>PARAGRAPHS,
   [`GET /api/documents/${DOCUMENT.document_id}/breaks`]:()=>BREAKS,
   [`GET /api/documents/${DOCUMENT.document_id}/sections`]:()=>SECTIONS,
+  [`GET /api/documents/${DOCUMENT.document_id}/preview`]:()=>DOCUMENT_PREVIEW,
   'POST /api/jobs':()=>({...REVIEWABLE,state:'queued',diagnosis:null,proposal:null,preview:null}),
   [`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>REVIEWABLE,
   [`POST /api/jobs/${REVIEWABLE.job_id}/accept`]:()=>({...REVIEWABLE,state:'accepted',accepted:true,decision:'accepted'}),
@@ -390,4 +398,146 @@ describe('explicit breaks',()=>{
    expect(screen.getByRole('button',{name:/Section 2 · starts nextPage/})).toHaveAttribute('aria-pressed','false');
   }
  });
+});
+
+/* Seeing the document is a precondition for reviewing a change to it. A formatting
+ * fault does not exist in a document's text, so a list of extracted paragraphs
+ * cannot show a reader the thing they complained about. */
+describe('the document itself',()=>{
+ async function openWorkspace(overrides={}){
+  const mock=mockApi(overrides);
+  render(<App/>);
+  act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
+  await screen.findByText(/CONNECTED/);
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  await screen.findByText(/IN THIS DOCUMENT/);
+  return mock;
+ }
+
+ it('renders the uploaded document before anything is diagnosed',async()=>{
+  await openWorkspace();
+  const pages=await screen.findAllByRole('img',{name:/Your document page/});
+  expect(pages).toHaveLength(DOCUMENT_PREVIEW.page_count);
+  expect(pages[0]).toHaveAttribute('src',DOCUMENT_PREVIEW.urls[0]);
+  expect(screen.getByText(/RENDERED BY LIBREOFFICE/)).toBeInTheDocument();
+  // A render of the original is not a proposal, and the page says so rather than
+  // leaving a reader to assume something has already been changed.
+  expect(screen.getByText(/Nothing here is a repair/)).toBeInTheDocument();
+ });
+
+ it('keeps the paragraph text reachable, because that is what carries the ids',async()=>{
+  await openWorkspace();
+  await screen.findAllByRole('img',{name:/Your document page/});
+  const views=screen.getByRole('group',{name:'Document view'});
+  await act(async()=>{fireEvent.click(within(views).getByRole('button',{name:'Text'}));});
+  expect(screen.queryByRole('img',{name:/Your document page/})).not.toBeInTheDocument();
+  // The evidence rows carry the paragraph ids the selection is made with, which is
+  // the whole reason this view stays reachable.
+  expect(screen.getByText('¶1')).toBeInTheDocument();
+  expect(screen.getByText('¶2')).toBeInTheDocument();
+ });
+
+ it('falls back to the text and says why when the document cannot be rendered',async()=>{
+  await openWorkspace({[`GET /api/documents/${DOCUMENT.document_id}/preview`]:()=>({
+   ...DOCUMENT_PREVIEW,rendered:false,page_count:0,urls:[],renderer_available:false,
+   unavailable_reason:'LibreOffice was not found, so the document cannot be rendered.'})});
+  expect(await screen.findByText(/LibreOffice was not found/)).toBeInTheDocument();
+  expect(screen.queryByRole('img',{name:/Your document page/})).not.toBeInTheDocument();
+  // An absent renderer does not block a diagnosis, and the page must not imply it does.
+  expect(screen.getByText(/a diagnosis is unaffected/)).toBeInTheDocument();
+ });
+
+ it('a failed run says how many times the model was asked, and that nothing changed',async()=>{
+  const failed={...REVIEWABLE,state:'failed',diagnosis:null,proposal:null,preview:null,
+   error_code:'invalid_response',error_detail:'duplicate evidence entry',
+   attempts:3,max_attempts:3,
+   discarded_attempts:[{attempt:1,error_code:'invalid_response',error:'duplicate evidence entry'},
+                       {attempt:2,error_code:'invalid_response',error:'duplicate evidence entry'}]};
+  await openWorkspace({'POST /api/jobs':()=>({...failed,state:'queued'}),
+                       [`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>failed});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
+  expect(await screen.findByText(/That run/)).toBeInTheDocument();
+  expect(await screen.findByText(/asked 3 times of 3/)).toBeInTheDocument();
+  // The server's own reason is kept verbatim: the refusal is the product here.
+  expect(screen.getByText(/Reason recorded: “duplicate evidence entry”/)).toBeInTheDocument();
+  expect(screen.getByText(/Your original document is untouched/)).toBeInTheDocument();
+  // The single-draw hint is not shown when the count already says it was re-asked.
+  expect(screen.queryByText(/often gets the same answer/)).not.toBeInTheDocument();
+ },20000);
+
+ it('a single refused answer suggests rephrasing, and claims only that the original is untouched',async()=>{
+  const failed={...REVIEWABLE,state:'failed',diagnosis:null,proposal:null,preview:null,
+   error_code:'invalid_response',error_detail:'duplicate evidence entry',
+   attempts:1,max_attempts:1,discarded_attempts:[{attempt:1,error_code:'invalid_response',error:'duplicate evidence entry'}]};
+  await openWorkspace({'POST /api/jobs':()=>({...failed,state:'queued'}),
+                       [`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>failed});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
+  expect(await screen.findByText(/That run/)).toBeInTheDocument();
+  expect(screen.getByText(/often gets the same answer/)).toBeInTheDocument();
+  expect(screen.queryByText(/times of/)).not.toBeInTheDocument();
+  // A failed run may have built a candidate, so "nothing was written" is never claimed.
+  expect(screen.queryByText(/Nothing was written/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/validator refused it/)).not.toBeInTheDocument();
+ },20000);
+
+ const route=(r)=>act(()=>{window.location.hash=r;window.dispatchEvent(new HashChangeEvent('hashchange'));});
+
+ it('shows the proposed pages in the workspace, labelled as a proposal, with no download',async()=>{
+  await openWorkspace();
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
+  await screen.findByText(/Direct 48pt where peers inherit 12pt/);
+  const views=screen.getByRole('group',{name:'Document view'});
+  expect(within(views).getAllByRole('button').map(b=>b.textContent)).toEqual(['Before','After','Text']);
+  // A finished job switches the canvas to the candidate, and says it is not accepted.
+  expect(await screen.findByRole('img',{name:'Proposed version page 1'})).toHaveAttribute('src',REVIEWABLE.preview.after_urls[0]);
+  expect(screen.getByText('AFTER · PROPOSED, NOT ACCEPTED')).toBeInTheDocument();
+  expect(screen.queryByRole('link',{name:/Download/})).not.toBeInTheDocument();
+  // Before is the original as the job rendered it, the same picture the review uses.
+  await act(async()=>{fireEvent.click(within(views).getByRole('button',{name:'Before'}));});
+  expect(screen.getByRole('img',{name:'Your document page 1'})).toHaveAttribute('src',REVIEWABLE.preview.before_urls[0]);
+  expect(screen.getByText('BEFORE · YOUR ORIGINAL')).toBeInTheDocument();
+ },20000);
+
+ it('after acceptance, shows before and after beside the download, and keeps it in the workspace',async()=>{
+  await openWorkspace();
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
+  await screen.findByText(/Direct 48pt where peers inherit 12pt/);
+  route('review');
+  fireEvent.click(await screen.findByRole('button',{name:/Accept this repair/}));
+  const download=await screen.findByRole('link',{name:/Download repaired .docx/});
+  expect(download).toHaveAttribute('href','/api/jobs/41abcdef0123/download');
+  expect(screen.getByRole('img',{name:'Before page 1'})).toHaveAttribute('src',REVIEWABLE.preview.before_urls[0]);
+  expect(screen.getByRole('img',{name:'After page 1'})).toHaveAttribute('src',REVIEWABLE.preview.after_urls[0]);
+  // Back in the workspace the accepted job keeps its download instead of a blank form.
+  route('workspace');
+  expect(await screen.findByRole('heading',{name:/^Repair\s*accepted\.$/})).toBeInTheDocument();
+  expect(screen.getAllByRole('link',{name:/Download/}).every(a=>a.getAttribute('href')==='/api/jobs/41abcdef0123/download')).toBe(true);
+  expect(screen.getByText('AFTER · ACCEPTED REPAIR')).toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:/Diagnose with Gemma/})).not.toBeInTheDocument();
+  // The review page offers the same file once the job is accepted.
+  route('review');
+  expect(await screen.findByRole('link',{name:/Download repaired .docx/})).toHaveAttribute('href','/api/jobs/41abcdef0123/download');
+ },20000);
+
+ it('never shows one document’s pages for another opened while it was rendering',async()=>{
+  const OTHER='0123456789abcdef0123456789abcdef';
+  let releaseFirst;
+  const slowFirst=new Promise(resolve=>{releaseFirst=()=>resolve(DOCUMENT_PREVIEW);});
+  await openWorkspace({
+   [`GET /api/documents/${DOCUMENT.document_id}/preview`]:()=>slowFirst,
+   'POST /api/documents':()=>({...DOCUMENT,document_id:OTHER,origin:'upload',is_demo_document:false}),
+   [`GET /api/documents/${OTHER}/paragraphs`]:()=>({...PARAGRAPHS,document_id:OTHER}),
+   [`GET /api/documents/${OTHER}/breaks`]:()=>BREAKS,
+   [`GET /api/documents/${OTHER}/sections`]:()=>SECTIONS,
+   [`GET /api/documents/${OTHER}/preview`]:()=>({...DOCUMENT_PREVIEW,document_id:OTHER,page_count:1,urls:[`/api/documents/${OTHER}/preview/0`]}),
+  });
+  route('upload');
+  const input=await screen.findByLabelText('Choose a Word document');
+  await act(async()=>{fireEvent.change(input,{target:{files:[new File(['x'],'other.docx')]}});});
+  await screen.findByRole('img',{name:'Your document page 1'});
+  // The first document's render finishes late; it must not replace the open one.
+  await act(async()=>{releaseFirst();await slowFirst;});
+  const pages=screen.getAllByRole('img',{name:/Your document page/});
+  expect(pages.map(p=>p.getAttribute('src'))).toEqual([`/api/documents/${OTHER}/preview/0`]);
+ },20000);
 });

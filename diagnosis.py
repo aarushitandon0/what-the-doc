@@ -82,6 +82,13 @@ _CONTROL = re.compile(r'[\x00-\x08\x0b-\x1f\x7f]')
 class DiagnosisError(ValueError):
     """A diagnosis that cannot be used, carrying a code the caller can branch on."""
 
+    # How many times the model was sampled before this refusal, filled in by the
+    # adapter when it had a budget to spend. A single draw leaves them as they are,
+    # so a caller can read them unconditionally.
+    attempts = 1
+    max_attempts = 1
+    discarded_attempts = ()
+
     def __init__(self, code, message):
         super().__init__(message)
         self.code = code

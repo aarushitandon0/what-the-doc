@@ -634,6 +634,26 @@ your reasoning step by step. Return the JSON object only.
 SCHEMA_REVISION = 'v4'
 GENERATION_OPTIONS = {'temperature': 0}
 THINK = False
+# How many times one complaint may be sampled before the run is reported as failed.
+#
+# Shipped at 1: re-sampling is OFF. The loop in `diagnose` is kept and tested so it
+# can be re-enabled, but it is not used, because it was measured not to help.
+#
+# Why it existed: Ollama's grammar path does not enforce `uniqueItems`, so
+# `gemma4:e2b` sometimes repeats an evidence entry and the validator refuses the answer
+# (TEST_RESULTS.md section 18.5). Section 18.2 notes temperature 0 is not always
+# reproducible here, so a second draw of the identical request might differ.
+#
+# Why it is off: re-running the failing live case (TEST_RESULTS.md section 18.12)
+# gave three identical draws, all refused for the same repeated citation. For
+# that input, a redraw of the identical request cannot change the answer, and three
+# draws roughly doubled the wait (67 s -> 136 s) before the same failure. A retry that
+# varied the request (seed, temperature) would change the measured configuration and
+# needs its own evaluation first.
+#
+# If re-enabled: only `invalid_response` is redrawn, every draw faces the same
+# `diagnosis.check`, and the last refusal stands when the budget is spent.
+DIAGNOSIS_ATTEMPTS = 1
 PROMPT_SHA256_V3 = '25d265d57f4af0c112040fc8625f549a48c7a76718bfd09a8b34e0b4857cb908'
 
 
@@ -913,37 +933,83 @@ def diagnose(path, complaint, paragraph_id, model=None, timeout=None, context=1,
                                  'selected_section_target_id': section_target_id,
                                  'document_is_untrusted_data': True,
                                  'document': payload_evidence})}]}
-    request = urllib.request.Request(endpoint_url(), data=json.dumps(payload).encode(),
-                                     headers={'Content-Type': 'application/json'})
     started = time.monotonic()
-    with observability.span('model.inference', model=model, mode='live',
-                            prompt_sha256=prompt_sha256()) as trace:
-        data = _request_bytes(request, timeout)
-        latency = round(time.monotonic() - started, 3)
-        if len(data) > MAX_RESPONSE_BYTES:
-            raise diagnosis.DiagnosisError(diagnosis.INVALID_RESPONSE, 'Model response too large')
+
+    def draw(attempt):
+        """One sample: ask, decode the envelope, validate. Returns (found, envelope).
+
+        The request is rebuilt per attempt because `urlopen` consumes it, and is
+        otherwise identical: the prompt, schema and generation options recorded
+        in provenance describe every draw, so a retried run is still the configuration
+        the evaluation measured.
+        """
+        request = urllib.request.Request(
+            endpoint_url(), data=json.dumps(payload).encode(),
+            headers={'Content-Type': 'application/json'})
+        # No per-attempt span tag: `observability.Trace.set` is a deliberate allowlist
+        # ("callers cannot add arbitrary span attributes"), and an unknown keyword is
+        # swallowed there, silently dropping the span's gen_ai attributes. The attempt
+        # count travels in the returned metadata instead.
+        with observability.span('model.inference', model=model, mode='live',
+                                prompt_sha256=prompt_sha256()) as trace:
+            data = _request_bytes(request, timeout)
+            if len(data) > MAX_RESPONSE_BYTES:
+                raise diagnosis.DiagnosisError(diagnosis.INVALID_RESPONSE,
+                                               'Model response too large')
+            try:
+                envelope = json.loads(data)
+                content = envelope['message']['content']
+            except (ValueError, KeyError, TypeError) as error:
+                raise diagnosis.DiagnosisError(diagnosis.INVALID_RESPONSE,
+                                               'Unexpected runtime envelope: %s' % error)
+            trace.set(input_tokens=envelope.get('prompt_eval_count'),
+                      output_tokens=envelope.get('eval_count'),
+                      response_model=envelope.get('model'))
+        with observability.span('diagnosis.validate'):
+            found = diagnosis.parse(content, paragraph_id,
+                                    payload_evidence['source_sha256'], supplied_ids,
+                                    supplied_targets=targets,
+                                    actionable_targets=actionable)
+        return found, envelope
+
+    discarded = []
+    for attempt in range(1, DIAGNOSIS_ATTEMPTS + 1):
         try:
-            envelope = json.loads(data)
-            content = envelope['message']['content']
-        except (ValueError, KeyError, TypeError) as error:
-            raise diagnosis.DiagnosisError(diagnosis.INVALID_RESPONSE,
-                                           'Unexpected runtime envelope: %s' % error)
-        trace.set(input_tokens=envelope.get('prompt_eval_count'),
-                  output_tokens=envelope.get('eval_count'), response_model=envelope.get('model'))
+            found, envelope = draw(attempt)
+            break
+        except diagnosis.DiagnosisError as error:
+            # Only a malformed answer is a bad draw. A missing model, a timeout or a
+            # refused selection is a stable condition: asking again changes nothing
+            # and costs the user another full wait.
+            if error.code != diagnosis.INVALID_RESPONSE:
+                raise
+            discarded.append({'attempt': attempt, 'error_code': error.code,
+                              'error': error.message})
+            if attempt == DIAGNOSIS_ATTEMPTS:
+                # The budget is spent. The last refusal stands, with its own reason
+                # intact, so the run fails for what the model actually did wrong -
+                # carrying the whole sequence, so a failed run can still report that
+                # it was a persistent fault and not one unlucky draw.
+                error.attempts = attempt
+                error.max_attempts = DIAGNOSIS_ATTEMPTS
+                error.discarded_attempts = discarded
+                raise
+
     metadata = {'model': model, 'is_gemma_family': is_gemma, 'endpoint': endpoint_url(),
                 'break_target_id': break_target_id,
                 'section_target_id': section_target_id,
                 'supplied_target_ids': sorted(targets),
                 'actionable_target_ids': sorted(actionable),
-                'latency_seconds': latency, 'context_paragraphs': sorted(supplied_ids),
+                # Wall clock across every draw, so a retried run never looks faster
+                # than the wait the user actually sat through.
+                'latency_seconds': round(time.monotonic() - started, 3),
+                'attempts': len(discarded) + 1,
+                'max_attempts': DIAGNOSIS_ATTEMPTS,
+                'discarded_attempts': discarded,
+                'context_paragraphs': sorted(supplied_ids),
                 'prompt_eval_count': envelope.get('prompt_eval_count'),
                 'eval_count': envelope.get('eval_count'),
                 'source_sha256': payload_evidence['source_sha256']}
-    with observability.span('diagnosis.validate'):
-        found = diagnosis.parse(content, paragraph_id,
-                                payload_evidence['source_sha256'], supplied_ids,
-                                supplied_targets=targets,
-                                actionable_targets=actionable)
     return found, metadata
 
 

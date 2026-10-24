@@ -2015,3 +2015,73 @@ So this would not have changed the final2 figures in 18.3: there the odd-page an
 wrote `true`. The remaining unset-length path (spacing 0) is the most frequent unsafe
 answer that reaches review; treating it the same way would need its own justification,
 because spacing has autospacing and compatibility rules that toggles do not.
+
+### 18.12 Follow-up: re-sampling a refused answer was measured and is disabled — 24 October 2026
+
+**Trigger.** A live run in the web app (`gemma4:e2b`, job
+`work/api/jobs/fce11ea9616ca14df6413bc514409e99/pipeline.json`, paragraph 0,
+"There's too much space above this heading.") failed after 67.0 s with
+`invalid_response` / `duplicate evidence entry`.
+
+**The 18.5 rule was not changed.** A *proposed* answer that repeats a citation is still
+refused. 18.5 is the evidence for that rule, and nothing here re-measures it.
+
+**What was tried.** `gemma_adapter.diagnose` gained a bounded re-sampling loop
+(`DIAGNOSIS_ATTEMPTS`): an answer refused as `invalid_response` is redrawn from the
+identical request (same prompt, schema and generation options), each draw faces the same
+`diagnosis.check`, and the last refusal stands when the budget runs out. The idea
+rested on 18.2's note that temperature 0 is not deterministic here.
+
+**What was measured.** The failing case was re-run live with a budget of 3
+(`work/verify-retry/pipeline.json`): `outcome: failed`, `attempts: 3`,
+`latency_seconds: 136.224`, all three discarded as `duplicate evidence entry`. The
+model's raw answers, captured before validation (`work/verify-retry/raw-draws.txt`),
+have **identical content in all three draws**: `status: proposed`, one operation
+`space_before_pt → 6.0` on paragraph 0, and evidence citing
+`(0, space_before_pt)` twice.
+
+**What that says.**
+- For this input, temperature-0 decoding reproduced exactly, so redrawing the identical
+  request cannot change the answer. 18.2's non-determinism note does not hold for every
+  case.
+- The loop did not help here and roughly doubled the wait (67 s → 136 s) before the same
+  failure.
+- The repeat is the only thing wrong: the answer cites the field it changes, so it
+  already satisfies the citation rule. That doesn't make it safe to pass. A
+  configuration of "drop repeats on proposals + citation rule" has **never been
+  measured**, and 18.5 shows the refusal once hid bad proposals.
+- The proposal itself is weak. Paragraph 0 inherits `space_before_pt: 12.0` from
+  `Heading1` and is the first paragraph in the document, so `no_change` or
+  `needs_clarification` would have been the better answer.
+
+**What ships.** `DIAGNOSIS_ATTEMPTS = 1`: re-sampling is off, so the failed run takes
+one draw again. The loop and its tests are kept; the loop's tests patch the budget to 3,
+and a new test pins the shipped value at 1. A retry that *varied* the request (seed or
+temperature) would change the measured generation options and needs its own
+evaluation. Because a single draw is the configuration 18.3 measured, the 18.3 figures
+are unaffected.
+
+**Not fixed.** This case still fails. The web app now says why: it quotes the
+server's recorded reason and states that the original document is untouched.
+
+**The failing case matches an eval case whose correct answer is no change.**
+`clean_paragraph_needs_no_change` asks the same thing ("Too much space above this
+heading.") about a heading that inherits its spacing from its style, expects
+`no_change` or `needs_clarification`, and forbids `space_before_pt`. The live
+failure proposes exactly that forbidden change (12 → 6 pt on a heading inheriting 12 pt
+from `Heading1`). That case's raw answer was captured live on 24 October
+(`work/raw-clean-case.txt`, one draw): `proposed`, `space_before_pt` → 12.0 (the value
+already there), with `(13, space_before_pt)` cited twice. In both, the repeated citation
+is attached to a wrong proposal, so the refusal is stopping answers that should not
+reach review anyway.
+
+**What this means for a schema fix.** Reshaping `evidence` so a repeat cannot be emitted
+(for example an object with one property per citable `(paragraph, field)`) does not
+change the validator. But it removes the refusal that currently stops these proposals,
+so it would likely let the live failure's 12 → 6 pt proposal reach review. The effect is
+close to dropping repeats on proposals, which 18.5 rejected. It is a schema and prompt
+change, and it should not ship without a full re-evaluation that counts unsafe
+proposals reaching review.
+
+Also in this change, unrelated to the above: the uploaded document is rendered to page
+images on arrival (`GET /api/documents/{id}/preview`, `API.md` §5).

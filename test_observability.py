@@ -81,16 +81,25 @@ class ObservabilityTests(unittest.TestCase):
         return self.transport.events()
 
     def fake_runtime(self, found=None, **usage):
+        """A `side_effect` for `urlopen`: one FRESH stream per call.
+
+        It must be a factory rather than a single `return_value`. A response stream is
+        consumed and closed by the first read, and the adapter re-samples a malformed
+        answer (`gemma_adapter.DIAGNOSIS_ATTEMPTS`), so a reused stream makes the second
+        draw raise `ValueError: I/O operation on closed file` instead of exercising the
+        path under test.
+        """
         envelope = {'model': 'gemma4:e2b',
                     'message': {'content': json.dumps(found if found is not None else self.found())},
                     **usage}
-        return io.BytesIO(json.dumps(envelope).encode())
+        payload = json.dumps(envelope).encode()
+        return lambda *args, **kwargs: io.BytesIO(payload)
 
     def test_actual_adapter_boundaries_emit_ai_conventions_tokens_and_source_hash(self):
         # This uses the live adapter path with an injected HTTP response. It is
         # not evidence of a live model call; it checks the real instrumentation.
         with patch.object(gemma_adapter.urllib.request, 'urlopen',
-                          return_value=self.fake_runtime(prompt_eval_count=31, eval_count=7)), \
+                          side_effect=self.fake_runtime(prompt_eval_count=31, eval_count=7)), \
                 patch.object(gemma_adapter, 'runtime_status', return_value={'available': True}):
             result = pipeline.run(self.source, self.target, 'PRIVATE_COMPLAINT_SENTINEL',
                                   self.root / 'adapter', model='gemma4:e2b', do_render=False)
@@ -141,7 +150,7 @@ class ObservabilityTests(unittest.TestCase):
 
     def test_invalid_schema_preserves_real_error_code_without_model_content(self):
         with patch.object(gemma_adapter.urllib.request, 'urlopen',
-                          return_value=self.fake_runtime(found={'private': 'PRIVATE_MODEL_OUTPUT_SENTINEL'})), \
+                          side_effect=self.fake_runtime(found={'private': 'PRIVATE_MODEL_OUTPUT_SENTINEL'})), \
                 patch.object(gemma_adapter, 'runtime_status', return_value={'available': True}):
             result = pipeline.run(self.source, self.target, 'PRIVATE_COMPLAINT_SENTINEL',
                                   self.root / 'invalid', model='gemma4:e2b', do_render=False)

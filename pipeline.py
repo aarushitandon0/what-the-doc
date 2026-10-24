@@ -143,7 +143,12 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
             found, metadata = diagnoser(source, complaint, paragraph_id)
             trace.set(model=(metadata or {}).get('model'))
     except diagnosis.DiagnosisError as error:
-        report['diagnosis_metadata'] = {'latency_seconds': round(time.monotonic() - started, 3)}
+        report['diagnosis_metadata'] = {
+            'latency_seconds': round(time.monotonic() - started, 3),
+            # A failed run says how many draws it took to fail, so a persistent fault
+            # is distinguishable from one unlucky sample after the fact.
+            'attempts': error.attempts, 'max_attempts': error.max_attempts,
+            'discarded_attempts': list(error.discarded_attempts)}
         return fail(error.code, error.message)
     except RuntimeError as error:
         # An unconfigured model is a missing model, not a crash.

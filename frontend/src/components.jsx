@@ -72,9 +72,11 @@ export function JobProgress({job,elapsed,onStopWatching}){
   <Button secondary onClick={onStopWatching}>Stop watching</Button>
   <p className="fineprint">The job keeps running on the server; this only stops polling.</p></>;
 }
-export function PreviewPages({urls=[],label,comparison}){
+export function PreviewPages({urls=[],label,comparison,zoom}){
  if(!urls.length)return <div className="preview-missing"><Loader/><p><strong>Not rendered.</strong> This job ran without LibreOffice previews. That is “not rendered”, not “no visible change”.</p></div>;
- return <div className="preview-pages" aria-label={label}>{urls.map((u,i)=><figure key={u}><img src={resolveUrl(u)} alt={`${label} page ${i+1}`} loading="lazy"/><figcaption>Page {i+1}{comparison?.[i]?.status==='compared'?` · ${(comparison[i].changed_ratio*100).toFixed(1)}% pixels changed`:''}</figcaption></figure>)}</div>;
+ /* `zoom` scales the width ceiling the canvas stylesheet sets (710px), so the
+  * workspace zoom buttons act on the page images as well as on the text view. */
+ return <div className="preview-pages" aria-label={label} style={zoom?{maxWidth:`${Math.round(710*zoom/100)}px`}:undefined}>{urls.map((u,i)=><figure key={u}><img src={resolveUrl(u)} alt={`${label} page ${i+1}`} loading="lazy"/><figcaption>Page {i+1}{comparison?.[i]?.status==='compared'?` · ${(comparison[i].changed_ratio*100).toFixed(1)}% pixels changed`:''}</figcaption></figure>)}</div>;
 }
 export function InvariantList({job}){
  const inv=job?.invariants||{};

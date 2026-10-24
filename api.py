@@ -145,6 +145,10 @@ class Store:
         """The one place a document id becomes a path. Never uses a client filename."""
         return self.documents_dir / document_id / 'original.docx'
 
+    def document_preview_dir(self, document_id):
+        """Where this document's own page renders live, beside the original."""
+        return self.documents_dir / document_id / 'preview'
+
     def job_dir(self, job_id):
         return self.jobs_dir / job_id
 
@@ -223,6 +227,15 @@ def _public_job(job):
         'invariant_failures': report.get('invariant_failures'),
         'model': (report.get('diagnosis_metadata') or {}).get('model'),
         'latency_seconds': (report.get('diagnosis_metadata') or {}).get('latency_seconds'),
+        # How many times the model was asked (gemma_adapter.DIAGNOSIS_ATTEMPTS). It
+        # ships at 1, so re-sampling is off and a live diagnosis reports one attempt
+        # of one; they are kept
+        # so a re-enabled budget would show a reviewer that an answer was not the
+        # model's first, and that a failed run spent its whole budget.
+        'attempts': (report.get('diagnosis_metadata') or {}).get('attempts'),
+        'max_attempts': (report.get('diagnosis_metadata') or {}).get('max_attempts'),
+        'discarded_attempts': (report.get('diagnosis_metadata')
+                               or {}).get('discarded_attempts') or [],
         'decision': job.get('decision'),
     }
     if found:
@@ -525,6 +538,84 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
         _document(document_id)
         with observability.span('structure.inspect'):
             return engine.inspect_breaks(store.document_path(document_id))
+
+    # -- the document as it stands ------------------------------------------
+    # A reader cannot check a repair against a document they have never seen. Before
+    # any job runs, the only view of an upload was its extracted text, which is
+    # precisely the layer formatting faults do not live in: a 48pt space above a
+    # heading looks identical to a 12pt one in a list of paragraphs. These two
+    # endpoints render the *original* so the page can show the document before
+    # anything is proposed, and so "before" and "after" are the same kind of picture.
+    #
+    # Rendering is lazy and cached: LibreOffice costs seconds, an upload that is never
+    # looked at should not pay it, and the original is immutable, so one render stays
+    # valid for the life of the document.
+    _preview_locks = {}
+
+    def _document_preview(document_id):
+        """Page image paths for one original, rendering once on first request."""
+        record = _document(document_id)
+        with store.lock:
+            lock = _preview_locks.setdefault(document_id, threading.Lock())
+        with lock:
+            cached = record.get('preview_pages')
+            if cached is not None:
+                return cached
+            if not render_module.find_soffice():
+                record['preview_pages'] = []
+                record['preview_unavailable'] = (
+                    'LibreOffice was not found, so the document cannot be rendered. '
+                    'Paragraph text is still shown.')
+                return []
+            out = store.document_preview_dir(document_id)
+            try:
+                pdf = render_module.docx_to_pdf(store.document_path(document_id), out)
+                pages = render_module.pdf_pages(pdf, out, 'original')
+            except (render_module.RendererUnavailable,
+                    render_module.RenderFailed) as error:
+                # A renderer that fails is reported, not raised: the document is still
+                # usable for a structural diagnosis, which is what the rest of the
+                # workspace does with it.
+                log.info('document preview failed id=%s reason=%s',
+                         document_id, type(error).__name__)
+                record['preview_pages'] = []
+                record['preview_unavailable'] = str(error)
+                return []
+            record['preview_pages'] = [page['image'] for page in pages]
+            record['preview_page_count'] = len(pages)
+            return record['preview_pages']
+
+    @app.get('/api/documents/{document_id}/preview')
+    def get_document_preview(document_id: str = PathParam(...)):
+        """How many pages the original renders to, and where to fetch each one."""
+        pages = _document_preview(document_id)
+        record = store.documents[document_id]
+        return {
+            'document_id': document_id,
+            'rendered': bool(pages),
+            'page_count': len(pages),
+            'urls': ['/api/documents/%s/preview/%d' % (document_id, i)
+                     for i in range(len(pages))],
+            'renderer_available': render_module.renderer_status()['available'],
+            'unavailable_reason': record.get('preview_unavailable'),
+            'note': ('The document as uploaded, rendered by LibreOffice. It '
+                     'approximates Word; it is not Word. Nothing here is a repair.'),
+        }
+
+    @app.get('/api/documents/{document_id}/preview/{index}')
+    def get_document_preview_page(document_id: str = PathParam(...),
+                                  index: int = PathParam(...)):
+        """One rendered page of the original. The path comes from the renderer."""
+        pages = _document_preview(document_id)
+        if not 0 <= index < len(pages):
+            raise ApiError(404, NOT_FOUND, 'No such preview page')
+        image = Path(pages[index]).resolve()
+        root = store.document_preview_dir(document_id).resolve()
+        # Defence in depth, exactly as the job previews do: a page is only ever served
+        # from inside this document's own render directory.
+        if not image.is_file() or root not in image.parents:
+            raise ApiError(404, NOT_FOUND, 'No such preview page')
+        return FileResponse(image, media_type='image/png')
 
     @app.get('/api/documents/{document_id}/sections')
     def get_sections(document_id: str = PathParam(...)):

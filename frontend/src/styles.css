@@ -58,3 +58,19 @@
 .section-list strong{display:block;font-size:.85rem}
 .section-list small{display:block;font-size:.75rem;color:#4a5750}
 .page-delta{margin:.75rem 0;padding:.7rem .85rem;border-radius:12px;background:#dde9cf;font-size:.86rem;line-height:1.5}
+
+/* The workspace canvas shows the uploaded document itself, so the page images need
+   the same width ceiling the paper mock-up uses and the view toggle has to sit in
+   the label strip without stretching it. */
+.canvas-controls{display:flex;align-items:center;gap:14px}
+.segmented.small{padding:2px;border-radius:6px}
+.segmented.small button{padding:6px 11px;font-size:9px;min-height:30px;letter-spacing:.6px}
+.canvas .preview-pages{max-width:710px;margin:auto}
+.canvas .preview-pages+.fineprint{max-width:710px;margin:18px auto 0;text-align:center}
+.text-button.inline{min-height:0;padding:0;font-size:inherit;font-weight:700}
+
+/* The results page repeats the before/after pages beside the download, so a person
+   can see what they are taking away without going back to the review. */
+.results-main .results-comparison{margin:30px auto;text-align:left}
+.results-main .results-comparison .preview-pages{max-width:none}
+.inspector a.text-button{display:block;margin:10px 0}

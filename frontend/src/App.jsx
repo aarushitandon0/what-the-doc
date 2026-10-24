@@ -49,6 +49,12 @@ export default function App(){
   * different repairs, approved separately, and the server refuses a job naming
   * both. */
  const [breaks,setBreaks]=useState(null),[sections,setSections]=useState(null),[selectedBreak,setSelectedBreak]=useState(null),[selectedSection,setSelectedSection]=useState(null);
+ /* The uploaded document rendered to pages, before anything is proposed. Held
+  * separately from `job.preview`: this is the document as it stands, not a
+  * comparison, and it stays valid while jobs come and go because the original is
+  * never written to. `null` means "not asked yet", which the canvas shows as
+  * loading rather than as "no render". */
+ const [docPreview,setDocPreview]=useState(null),[docView,setDocView]=useState('pages');
  const [busy,setBusy]=useState(''),[apiError,setApiError]=useState(null),[elapsed,setElapsed]=useState(0);
  const [jobs,setJobs]=useState([]);
  const abort=useRef(null),clock=useRef(null);
@@ -77,9 +83,25 @@ export default function App(){
   try{setBreaks(await api.getBreaks(documentId));}catch(error){fail(error);}
   try{setSections(await api.getSections(documentId));}catch(error){fail(error);}
  };
+ /* Rendering costs seconds of LibreOffice, so it is never awaited on the way into
+  * the workspace: the outline and text appear immediately and the pages replace them
+  * when they arrive. A failure here is not a failed document - the diagnosis path is
+  * structural and works without a render - so it degrades to the text view and says
+  * why, rather than surfacing as an API error. */
+ /* A render takes seconds, so a second document can be opened before the first one's
+  * pages arrive. Only the answer for the document currently open is kept. */
+ const previewFor=useRef(null);
+ const loadDocPreview=async(documentId)=>{
+  previewFor.current=documentId;setDocPreview(null);
+  let result;
+  try{result=await api.getDocumentPreview(documentId);}
+  catch(error){if(error?.name==='AbortError')return;result={rendered:false,page_count:0,urls:[],unavailable_reason:api.errorText(error)};}
+  if(previewFor.current===documentId)setDocPreview(result);
+ };
  const openDocument=async(record)=>{
-  setDemoChosen(false);setDoc(record);setJob(null);setApiError(null);setSelectedBreak(null);
-  try{await loadParagraphs(record.document_id);go('workspace');}catch(error){fail(error);}
+  previewFor.current=null;setDocPreview(null);
+  setDemoChosen(false);setDoc(record);setJob(null);setApiError(null);setSelectedBreak(null);setSelectedSection(null);setDocView('pages');
+  try{await loadParagraphs(record.document_id);go('workspace');loadDocPreview(record.document_id);}catch(error){fail(error);}
  };
  const uploadReal=async(f)=>{
   const message=validateFile(f);
@@ -101,7 +123,11 @@ export default function App(){
    const finished=await api.pollJob(started.job_id,{signal:controller.signal,onUpdate:setJob});
    setJob(finished);
    if(finished.state==='needs_clarification')go('clarify');
-   else if(finished.state==='awaiting_review')notify('A candidate is ready for review. Completing a job is not accepting it.');
+   else if(finished.state==='awaiting_review'){
+    // Show the proposed pages straight away; the original stays one click away.
+    if(finished.preview?.rendered&&finished.preview.after_urls?.length)setDocView('after');
+    notify('A candidate is ready for review. Completing a job is not accepting it.');
+   }
   }catch(error){fail(error);}
   finally{clearInterval(clock.current);}
  };
@@ -156,6 +182,21 @@ export default function App(){
    ?`remove one ${op.expected_break_type} break`
    :`¶${op.paragraph_id} ${String(op.field||'').replace(/_/g,' ')} → ${op.value}`;
  const previewReady=job?.preview?.rendered;
+ /* The pages of the uploaded document itself. A finished job re-renders the same
+  * original, so its "before" pages are preferred once they exist - one render, and
+  * the picture in the workspace is literally the one the review compares against. */
+ const docPages=(previewReady&&job.preview.before_urls?.length?job.preview.before_urls:docPreview?.urls)||[];
+ /* The candidate's pages, once a job has rendered one. They are a proposal until a
+  * person accepts them, and the canvas label says which of the two it is showing. */
+ const afterPages=(previewReady&&['awaiting_review','accepted'].includes(job?.state)&&job.preview.after_urls)||[];
+ const canvasView=docView==='after'&&!afterPages.length?'pages':docView;
+ const viewOptions=afterPages.length?[['pages','Before'],['after','After'],['text','Text']]:[['pages','Pages'],['text','Text']];
+ /* One way to change the selected paragraph, from the outline or the text view. A
+  * break or section id belongs to one paragraph, so both are cleared with it. */
+ const selectLive=(paragraphId)=>{
+  if(api.isPending(job)||paragraphId===liveSelected)return;
+  setLiveSelected(paragraphId);setJob(null);setSelectedBreak(null);setSelectedSection(null);
+ };
  const breaksHere=(breaks?.breaks||[]).filter(b=>b.paragraph_id===liveSelected&&b.edit_eligible);
  const renderUnavailable=backend.health?.renderer?.available===false;
  /* A structural change the server will not accept unrendered. The button is disabled
@@ -191,8 +232,28 @@ export default function App(){
    <p className="fineprint">Reaching this state is not approval. Nothing of yours has been changed.</p>
    <a className="button primary full" href="#review">Review the change <ArrowUpRight/></a>
    <button className="text-button" onClick={rejectLive} disabled={busy==='rejecting'}>Keep the original</button></>;
+  /* An accepted job is the one state with a file to hand back, so the download sits
+   * here as well as on the results page. A further fix starts from the original
+   * again: the workspace never edits the file it was given. */
+  if(job?.state==='accepted')return <><Badge><Check/> ACCEPTED</Badge><h2>Repair<br/>accepted.</h2>
+   <p>{job.diagnosis?.explanation}</p>
+   <div className="property-table">{proposalRows.map((op,i)=><div key={i}><span>{opLabel(op)}</span><strong>{opValue(op)}</strong></div>)}</div>
+   <a className="button primary full" href={api.downloadUrl(job.job_id)} download>Download repaired .docx <Download/></a>
+   <a className="text-button" href="#review">Compare before and after</a>
+   <p className="fineprint">Your original is untouched. Another fix here starts from the original again; to build on this repair, upload the downloaded file.</p>
+   <Button secondary onClick={()=>{setJob(null);setDocView('pages');}}>Fix something else</Button></>;
   if(job?.state==='no_supported_repair')return <><Badge tone="warning"><AlertCircle/> {job.diagnosis?.status?.toUpperCase()}</Badge><h2>Nothing<br/>to apply.</h2><p>{job.diagnosis?.explanation}</p><p className="fineprint">{stateNote[job.state]}</p><Button onClick={()=>setJob(null)}>Describe something else</Button></>;
-  if(job?.state==='failed')return <><ModeBadge job={job}/><Badge tone="warning"><AlertCircle/> {job.error_code}</Badge><h2>That run<br/>failed.</h2><p>{job.error_detail||api.ERROR_TEXT[job.error_code]}</p><Button onClick={()=>setJob(null)}>Try again</Button></>;
+  if(job?.state==='failed')return <><ModeBadge job={job}/><Badge tone="warning"><AlertCircle/> {job.error_code}</Badge><h2>That run<br/>failed.</h2>
+   <p>{api.ERROR_TEXT[job.error_code]||job.error_detail}</p>
+   {/* The server's own words, kept verbatim and marked as such. Not attributed to
+     * the validator: the same codes also cover timeouts, runtime errors and renders. */}
+   {job.error_detail&&<p className="fineprint">Reason recorded: “{job.error_detail}”.</p>}
+   {job.attempts>1&&<p className="fineprint">Gemma was asked {job.attempts} times{job.max_attempts?` of ${job.max_attempts}`:''} and every answer was refused. Asking again is unlikely to help unless the complaint changes.</p>}
+   {job.error_code==='invalid_response'&&!(job.attempts>1)&&<p className="fineprint">Asking the same question again often gets the same answer. Describing the problem differently, or choosing another paragraph, is more likely to help.</p>}
+   {/* A run can fail after a candidate was built (a render or invariant failure), so
+     * the claim is about the original, which is never written to. */}
+   <p className="fineprint">Your original document is untouched.</p>
+   <Button onClick={()=>setJob(null)}>Try again</Button></>;
   if(job?.state==='rejected')return <><Badge tone="quiet">Original kept</Badge><h2>Rejected.</h2><p>The candidate stays on disk for inspection and cannot be accepted later.</p><Button onClick={()=>setJob(null)}>Describe something else</Button></>;
   return <><span className="eyebrow">TELL US WHAT’S OFF</span><h2>What the<br/>document?</h2>
    <ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>
@@ -217,17 +278,38 @@ export default function App(){
   {api.isPending(job)&&<ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>}
   <div className="workspace">
    <aside className="outline-panel"><span className="eyebrow">IN THIS DOCUMENT</span>
-    <div className="outline-scroll">{docParagraphs.map(p=><button key={p.paragraph_id} disabled={api.isPending(job)} className={`outline-item ${liveSelected===p.paragraph_id?'selected':''}`} aria-pressed={liveSelected===p.paragraph_id} onClick={()=>{setLiveSelected(p.paragraph_id);setJob(null);setSelectedBreak(null);setSelectedSection(null);}}>
+    <div className="outline-scroll">{docParagraphs.map(p=><button key={p.paragraph_id} disabled={api.isPending(job)} className={`outline-item ${liveSelected===p.paragraph_id?'selected':''}`} aria-pressed={liveSelected===p.paragraph_id} onClick={()=>selectLive(p.paragraph_id)}>
      <span>{p.paragraph_id}</span><span><strong>{paragraphLabel(p).slice(0,38)}</strong><small>{p.style_id||'no style'}</small></span></button>)}</div>
     <SectionList report={sections} selectedId={selectedSection} disabled={api.isPending(job)} onSelect={id=>{setSelectedSection(id);if(id)setSelectedBreak(null);}}/>
     <a className="backlink" href="#upload"><Plus/> Different document</a></aside>
-   <section className="canvas"><div className="canvas-label"><span>{previewReady?'RENDERED BY LIBREOFFICE':'DOCUMENT EVIDENCE'}</span><span>{job?`job ${job.job_id.slice(0,8)} · ${job.state}`:`document ${doc.document_id.slice(0,8)}`}</span></div>
-    {previewReady
-     ? <PreviewPages urls={job.preview.before_urls} label="Original render"/>
-     : <div className="evidence-list" style={{fontSize:`${zoom/100}rem`}}>{docParagraphs.map(p=><article key={p.paragraph_id} className={`evidence-row ${liveSelected===p.paragraph_id?'target':''}`} onClick={()=>setLiveSelected(p.paragraph_id)}>
+   <section className="canvas"><div className="canvas-label">
+     <span>{canvasView==='after'
+       ?(job.state==='accepted'?'AFTER · ACCEPTED REPAIR':'AFTER · PROPOSED, NOT ACCEPTED')
+       :docPages.length&&canvasView==='pages'?(afterPages.length?'BEFORE · YOUR ORIGINAL':'YOUR DOCUMENT · RENDERED BY LIBREOFFICE'):'DOCUMENT EVIDENCE'}</span>
+     <span className="canvas-controls">
+      {/* The page view is the document as it stands; once a job has rendered a
+        * candidate, an After view shows that candidate. The text view is the same
+        * paragraphs the diagnosis is given, and stays reachable because it is the
+        * only view with the ids, styles and click targets the selection needs. */}
+      {(docPages.length>0||afterPages.length>0)&&<span className="segmented small" role="group" aria-label="Document view">
+        {viewOptions.map(([v,t])=><button key={v} aria-pressed={canvasView===v} onClick={()=>setDocView(v)}>{t}</button>)}</span>}
+      <span>{job?`job ${job.job_id.slice(0,8)} · ${job.state}`:`document ${doc.document_id.slice(0,8)}`}</span></span></div>
+    {canvasView==='after'
+     ? <><PreviewPages urls={afterPages} label="Proposed version" comparison={job.visual_comparison?.pages} zoom={zoom}/>
+        <p className="fineprint">{job.state==='accepted'
+          ?<>This is the accepted repair. <a className="text-button inline" href={api.downloadUrl(job.job_id)} download>Download the repaired .docx</a>.</>
+          :<>This is a proposal, not a change: nothing is written until you accept it. <a className="text-button inline" href="#review">Compare before and after</a>.</>}</p></>
+     : docPages.length>0&&canvasView==='pages'
+     ? <><PreviewPages urls={docPages} label="Your document" zoom={zoom}/>
+        <p className="fineprint">{docPreview?.note} Nothing here is a repair: this is the file you uploaded. Switch to <button className="text-button inline" onClick={()=>setDocView('text')}>Text</button> to pick a paragraph.</p></>
+     : <div className="evidence-list" style={{fontSize:`${zoom/100}rem`}}>{docParagraphs.map(p=><article key={p.paragraph_id} className={`evidence-row ${liveSelected===p.paragraph_id?'target':''}`} onClick={()=>selectLive(p.paragraph_id)}>
         <header><span>¶{p.paragraph_id}</span><small>{p.style_id||'no style'}</small></header>
         <p>{paragraphLabel(p)}</p></article>)}
-       <p className="fineprint">No page render yet. LibreOffice previews appear once a job runs with rendering available.</p></div>}
+       {docPreview===null
+        ? <p className="fineprint">Rendering your document with LibreOffice… the pages appear here when it finishes.</p>
+        : docPages.length===0
+        ? <p className="fineprint">This document could not be rendered, so there are no pages to show: {docPreview.unavailable_reason||'the renderer is unavailable'}. Spacing, indent and alignment are still read from the file itself, so a diagnosis is unaffected.</p>
+        : null}</div>}
    </section>
    <aside className="inspector">{liveInspector()}</aside></div></>;
 
@@ -248,7 +330,8 @@ export default function App(){
    <div className="review-bar"><div><Badge>{proposalRows.length} TARGETED CHANGE{proposalRows.length===1?'':'S'}</Badge>
      <p>{proposalRows.map(opSentence).join(' · ')}</p></div>
     <div>{job.state==='accepted'
-      ?<a className="button primary" href="#results">View accepted result <ArrowUpRight/></a>
+      ?<><a className="button outline" href="#results">View accepted result <ArrowUpRight/></a>
+        <a className="button primary" href={api.downloadUrl(job.job_id)} download>Download repaired .docx <Download/></a></>
       :job.state==='rejected'?<Badge tone="quiet">Rejected · original kept</Badge>
       :<><Button secondary disabled={busy==='rejecting'} onClick={rejectLive}>Keep original</Button>
         <Button disabled={busy==='accepting'||structuralUnrendered} aria-describedby={!previewReady?'structural-review-warning':undefined} onClick={acceptLive}>{busy==='accepting'?'Checking integrity…':<>{structuralUnrendered?'Cannot accept without a render':previewReady?'Accept this repair':'Accept after structural review'} <Check/></>}</Button></>}</div></div></>
@@ -263,7 +346,10 @@ export default function App(){
     <div className="receipt-row"><span>Model</span><strong>{job.model} · {typeof job.latency_seconds==='number'?`${job.latency_seconds.toFixed(1)}s`:'—'}</strong></div></div>
    <InvariantList job={job}/>
    {!previewReady&&<p className="preview-missing"><strong>Accepted after structural review only.</strong> Visual comparison was unavailable; no visual verification occurred.</p>}
-   <div className="result-actions"><a className="button primary" href={api.downloadUrl(job.job_id)}>Download repaired .docx <Download/></a>
+   {previewReady&&<div className="comparison results-comparison">
+    <section><div className="compare-label">BEFORE <small>{pageCount(job.preview.before_page_count)}</small></div><PreviewPages urls={job.preview.before_urls||[]} label="Before"/></section>
+    <section><div className="compare-label green">AFTER <small>{pageCount(job.preview.after_page_count)}</small></div><PreviewPages urls={job.preview.after_urls||[]} label="After" comparison={job.visual_comparison?.pages}/></section></div>}
+   <div className="result-actions"><a className="button primary" href={api.downloadUrl(job.job_id)} download>Download repaired .docx <Download/></a>
     <a className="button outline" href="#upload">Another document <Plus/></a></div>
    <p className="fineprint">The integrity check runs once more as the bytes are served. Your original is untouched and is always the undo path.</p>
    <a className="backlink" href="#review">Compare the pages again</a></>
@@ -295,7 +381,7 @@ export default function App(){
  /* A real document opened against the backend is live work. If the backend becomes
   * unreachable it is held and reported, never replaced by the bundled sample. */
  const liveWork=Boolean(doc||job);
- const leaveLiveWork=()=>{abort.current?.abort();setDoc(null);setDocParagraphs([]);setLiveSelected(null);setJob(null);setApiError(null);sample();};
+ const leaveLiveWork=()=>{abort.current?.abort();previewFor.current=null;setDocPreview(null);setDoc(null);setDocParagraphs([]);setLiveSelected(null);setJob(null);setApiError(null);sample();};
 
  let page;
  if(connected&&LIVE_ROUTES.includes(route)&&(!demoChosen||route==='upload'))page=livePage();
