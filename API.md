@@ -583,6 +583,15 @@ wrong".
 
 ## 5. Previews
 
+### `answered_by`
+
+Every job reports `answered_by`: `"model"` (a live Gemma answer), `"fixture"` (an
+injected diagnosis) or `"rule"`. A rule answer comes from `precheck.py`, which runs
+before the model for one situation only: a spacing complaint about a paragraph whose
+spacing is inherited, not set on the paragraph. It can only answer `no_change`, never
+proposes an edit, creates no candidate, and reports `is_live_model_answer: false`,
+`model: null` and `attempts: 0`.
+
 ### The original bytes
 
 ```

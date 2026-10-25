@@ -190,7 +190,11 @@ def _public_job(job):
         'document_id': job['document_id'],
         'state': job['state'],
         'mode': job['mode'],
-        'is_live_model_answer': job['mode'] == LIVE,
+        # A fixed rule (precheck.py) can answer before the model is asked. That is not a
+        # model answer, and must never be labelled as one.
+        'answered_by': report.get('answered_by') or ('model' if job['mode'] == LIVE
+                                                     else 'fixture'),
+        'is_live_model_answer': job['mode'] == LIVE and report.get('answered_by') != 'rule',
         'paragraph_id': job['paragraph_id'],
         'created_at': job['created_at'],
         'updated_at': job['updated_at'],

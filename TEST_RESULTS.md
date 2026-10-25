@@ -2085,3 +2085,55 @@ proposals reaching review.
 
 Also in this change, unrelated to the above: the uploaded document is rendered to page
 images on arrival (`GET /api/documents/{id}/preview`, `API.md` §5).
+
+
+### 18.13 Follow-up: a fixed rule now answers one situation before the model — 24 October 2026
+
+**Why.** The failing live case (18.12) and two eval cases (`clean_paragraph_needs_no_change`,
+`wrong_paragraph_for_the_complaint`) are the same situation: a spacing complaint about a
+paragraph that has no spacing of its own. The correct answer is "no change", and the
+model gets it wrong. A deterministic check can read the answer from the document.
+
+**What it is (`precheck.py`).** It answers only when all of these hold: the complaint
+is plainly about space above *or* below (not both) and mentions nothing else (page,
+break, alignment, indent, …); the paragraph's own value for that spacing is not direct
+formatting; no automatic-spacing override; no page-break-before; no explicit break in
+the paragraph; and the neighbouring paragraph's facing spacing is not direct either. Its
+only possible answer is `no_change`, built from the document's own provenance ("12 pt
+from the Heading1 style") and passed through `diagnosis.check`. It cannot propose an
+edit. In every other situation it declines and the model is asked as before. It is
+skipped for injected (fixture) diagnosers.
+
+**Labelled as what it is.** The report carries `answered_by: "rule"` and
+`diagnosis_metadata.model = null`; the API reports `answered_by` and sets
+`is_live_model_answer` false; the UI says "CHECKED BY A FIXED RULE · NO MODEL USED".
+
+**Effect on the eval cases** (offline, no model): of the 15 eval cases the rule answers
+exactly the two named above and declines the other 13, including the planted 48 pt
+override (`fault_excessive_spacing`). On the originally failing document, paragraph 0
+with "There's too much space above this heading." is answered instantly with the
+Heading1 explanation.
+
+**What this does NOT change.** The evaluation harness keeps `use_precheck=False` by
+default (`--with-precheck` turns it on), so every figure in 18.3 still measures the
+model alone and is not affected. No new model measurement was made for this section;
+the two cases above were *not* re-run with the rule on, and no pass rate is claimed
+for it beyond the offline result above.
+
+**Re-test of "drop repeats on proposals" (option B), stopped early.** A 45-run
+comparison was started on the same code (control: current rule; variant: repeats
+dropped for every status). The control finished (45 runs). The variant was stopped at
+31 of 45 runs because the machine was needed for other work; its log is
+`work/eval-2410-repeats-proposed.log`. On the first 31 runs of each:
+
+| outcome (runs 1–31) | current rule | repeats dropped on proposals |
+| --- | --- | --- |
+| pass | 7 | 9 |
+| unsafe proposal | 7 | 9 |
+| rejected for repeated citation (`evidence_failure`) | 7 | 0 |
+| wrong abstention | 1 | 4 |
+
+This is partial and one run per cell is noisy. It does not show the looser rule is
+safe, and it does not show it is much worse: it moves seven refusals into a mixture of
+passes, unsafe proposals and wrong abstentions. 18.5 stands, the shipped rule is
+unchanged, and a decision to change it needs the full 45 runs.

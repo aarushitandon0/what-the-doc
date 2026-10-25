@@ -440,7 +440,7 @@ def aggregate(results):
 
 
 def main(work_dir, model=None, timeout=None, do_render=False, only=None, context=1,
-         repeat=1, include=('ten',), echo=True):
+         repeat=1, include=('ten',), echo=True, use_precheck=False):
     work_dir = Path(work_dir)
     documents = build_documents(work_dir)
     runtime = gemma_adapter.runtime_status()
@@ -469,7 +469,7 @@ def main(work_dir, model=None, timeout=None, do_render=False, only=None, context
                                           case['complaint'], case_dir,
                                           mode=pipeline.LIVE, do_render=do_render,
                                           model=model, timeout=timeout,
-                                          context=context)
+                                          context=context, use_precheck=use_precheck)
                     record = grade(case, report)
                     expect_repair = case['expect_repair'] is not None
                 else:
@@ -481,7 +481,8 @@ def main(work_dir, model=None, timeout=None, do_render=False, only=None, context
                                           mode=pipeline.LIVE, do_render=True,
                                           model=model, timeout=timeout,
                                           context=context, break_target_id=break_id,
-                                          section_target_id=section_id)
+                                          section_target_id=section_id,
+                                          use_precheck=use_precheck)
                     record = grade_structural(case, report, break_id or section_id)
                     expect_repair = case['expect_operation'] is not None
                 record['category'] = classify(record, expect_repair)
@@ -553,6 +554,9 @@ if __name__ == '__main__':
                         help='run every selected case this many times')
     parser.add_argument('--structural', action='store_true',
                         help='also run the separately scored structural set')
+    parser.add_argument('--with-precheck', action='store_true',
+                        help='let the fixed spacing rule answer before the model (off by '
+                             'default, so the numbers keep measuring the model alone)')
     parser.add_argument('--structural-only', action='store_true',
                         help='run only the structural set')
     args = parser.parse_args()
@@ -560,7 +564,8 @@ if __name__ == '__main__':
                else ('ten', 'structural') if args.structural else ('ten',))
     result = main(args.work_dir, model=args.model, timeout=args.timeout,
                   do_render=args.render, only=args.only, context=args.context,
-                  repeat=args.repeat, include=include)
+                  repeat=args.repeat, include=include,
+                  use_precheck=args.with_precheck)
     print(table(result))
     print()
     print(json.dumps({k: v for k, v in result.items()

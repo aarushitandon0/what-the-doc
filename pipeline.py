@@ -26,6 +26,7 @@ import diagnosis
 import engine
 import gemma_adapter
 import observability
+import precheck
 import render as render_module
 import workflow
 
@@ -57,15 +58,19 @@ def _validate_plan(source, plan):
 
 def run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
         do_render=True, model=None, timeout=None, context=1, break_target_id=None,
-        section_target_id=None):
-    """Trace one finite repair; the API worker's enclosing trace is reused."""
+        section_target_id=None, use_precheck=True):
+    """Trace one finite repair; the API worker's enclosing trace is reused.
+
+    `use_precheck=False` always asks the model; the live evaluation uses it so that it
+    keeps measuring the model, not the rule that runs in front of it.
+    """
     with observability.transaction('repair.execute',
                                    mode=FIXTURE if diagnoser is not None else mode,
                                    model=model) as trace:
         report = _run(source, paragraph_id, complaint, work_dir, diagnoser=diagnoser,
                       mode=mode, do_render=do_render, model=model, timeout=timeout,
                       context=context, break_target_id=break_target_id,
-                      section_target_id=section_target_id)
+                      section_target_id=section_target_id, use_precheck=use_precheck)
         trace.set(outcome=report['outcome'], error_code=report.get('error_code'),
                   operation_kind=report.get('operation_kind'))
         return report
@@ -73,7 +78,7 @@ def run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
 
 def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
          do_render=True, model=None, timeout=None, context=1, break_target_id=None,
-         section_target_id=None):
+         section_target_id=None, use_precheck=True):
     """Diagnose one complaint and, if a repair is proposed, build a candidate to review.
 
     `diagnoser` is the injection point for deterministic tests: a callable
@@ -83,6 +88,7 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
     """
     source, work_dir = Path(source), Path(work_dir)
     work_dir.mkdir(parents=True, exist_ok=True)
+    live_model = diagnoser is None
     if diagnoser is None:
         def diagnoser(path, text, selected):
             return gemma_adapter.diagnose(path, text, selected, model=model,
@@ -138,6 +144,30 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
 
     stage('selected')
     started = time.monotonic()
+    ruled = None
+    if live_model and use_precheck:
+        # A deterministic check for the one situation the model measurably gets wrong:
+        # a spacing complaint about a paragraph that has no spacing of its own. It can
+        # only answer "no_change", never propose an edit, and says so in the report.
+        try:
+            ruled = precheck.inherited_spacing(source, paragraph_id, complaint,
+                                               break_target_id, section_target_id)
+        except Exception:                              # pragma: no cover - defensive
+            ruled = None
+    if ruled is not None:
+        report['answered_by'] = 'rule'
+        report['diagnosis'] = ruled
+        report['diagnosis_metadata'] = {
+            'model': None, 'rule': precheck.RULE, 'answered_by': 'rule',
+            'latency_seconds': round(time.monotonic() - started, 3),
+            'attempts': 0, 'max_attempts': 0, 'discarded_attempts': []}
+        stage('diagnosed')
+        report['outcome'] = ruled['status']
+        report['note'] = ('A fixed rule answered this without asking the model: the '
+                          'spacing is inherited from a style, so this paragraph has '
+                          'nothing of its own to repair. No candidate exists.')
+        stage(ruled['status'])
+        return _finish(report, work_dir)
     try:
         with observability.span('diagnosis.execute') as trace:
             found, metadata = diagnoser(source, complaint, paragraph_id)

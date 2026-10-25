@@ -86,6 +86,7 @@ export function InvariantList({job}){
 }
 export function ModeBadge({job}){
  if(!job)return null;
+ if(job.answered_by==='rule')return <Badge tone="quiet">CHECKED BY A FIXED RULE · NO MODEL USED</Badge>;
  return job.is_live_model_answer
   ? <Badge tone="quiet">LIVE MODEL ANSWER · {job.model}</Badge>
   : <Badge tone="warning"><AlertCircle/> FIXTURE — INJECTED BY A DEVELOPER, NOT A MODEL</Badge>;

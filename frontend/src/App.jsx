@@ -320,7 +320,7 @@ export default function App(){
    <a className="text-button" href="#review">Compare before and after</a>
    <p className="fineprint">Your original is untouched. Another fix here starts from the original again; to build on this repair, upload the downloaded file.</p>
    <Button secondary onClick={()=>{setJob(null);setDocView('pages');}}>Fix something else</Button></>;
-  if(job?.state==='no_supported_repair')return <><Badge tone="warning"><AlertCircle/> {job.diagnosis?.status?.toUpperCase()}</Badge><h2>Nothing<br/>to apply.</h2><p>{job.diagnosis?.explanation}</p><p className="fineprint">{stateNote[job.state]}</p><Button onClick={()=>setJob(null)}>Describe something else</Button></>;
+  if(job?.state==='no_supported_repair')return <><ModeBadge job={job}/>{job.answered_by!=='rule'&&<Badge tone="warning"><AlertCircle/> {job.diagnosis?.status?.toUpperCase()}</Badge>}<h2>{job.diagnosis?.status==='no_change'?<>Nothing wrong<br/>here.</>:<>Nothing<br/>to apply.</>}</h2><p>{job.diagnosis?.explanation}</p><p className="fineprint">{job.answered_by==='rule'?'Answered instantly from the document’s own settings. Nothing was changed.':stateNote[job.state]}</p><Button onClick={()=>setJob(null)}>Describe something else</Button></>;
   /* Gemma answered, but the safety checks threw the answer away. That is the checks
    * working, not the app breaking, so it is said plainly rather than as a crash. */
   if(api.isRefusal(job))return <><ModeBadge job={job}/><Badge tone="quiet">NOTHING CHANGED</Badge><h2>No safe fix<br/>found.</h2>

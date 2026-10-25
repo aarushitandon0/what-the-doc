@@ -673,3 +673,26 @@ describe('choosing what to check',()=>{
   expect(await screen.findByRole('heading',{name:/No safe fix\s*found\./})).toBeInTheDocument();
  },30000);
 });
+
+/* A fixed rule can answer a spacing complaint before the model is asked, when the
+ * paragraph has no spacing of its own. It must read as exactly that: not as a model's
+ * answer, and not as an error. */
+describe('answered by a fixed rule',()=>{
+ it('says no model was used and that nothing is wrong, without a failure or an error code',async()=>{
+  const ruled={...REVIEWABLE,state:'no_supported_repair',answered_by:'rule',is_live_model_answer:false,model:null,proposal:null,preview:null,
+   diagnosis:{status:'no_change',explanation:'This paragraph has no spacing of its own. The space above it is 12 pt and comes from the Heading1 style.',evidence:[{paragraph_id:1,field:'space_before_pt'}],question:null}};
+  mockApi({'POST /api/jobs':()=>({...ruled,state:'queued',diagnosis:null}),[`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>ruled});
+  render(<App/>);
+  act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  await pick();
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Diagnose with Gemma/}));});
+  expect(await screen.findByRole('heading',{name:/Nothing wrong\s*here\./})).toBeInTheDocument();
+  expect(screen.getByText(/CHECKED BY A FIXED RULE · NO MODEL USED/)).toBeInTheDocument();
+  expect(screen.getByText(/comes from the Heading1 style/)).toBeInTheDocument();
+  expect(screen.queryByText(/LIVE MODEL ANSWER/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/NO_CHANGE/)).not.toBeInTheDocument();
+  expect(screen.queryByText(/failed/i)).not.toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:/Accept/})).not.toBeInTheDocument();
+ },20000);
+});
