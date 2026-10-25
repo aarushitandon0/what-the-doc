@@ -79,7 +79,7 @@ paginate alike, so rendered pages stay an approximation.
 
 ## System architecture
 
-![Layered architecture: a React interface over a FastAPI adapter, over the pipeline, over the diagnosis and repair layers, over the core modules, with optional tracing as a leaf](docs/diagrams/architecture.svg)
+![Layered architecture: a React interface over a FastAPI adapter, over the pipeline, over the diagnosis and repair layers, over the core modules, with observability as a leaf](docs/diagrams/architecture.png)
 
 The direction of dependency is the whole design. The HTTP adapter calls the pipeline,
 the pipeline calls diagnosis and workflow, and those call the engine. Nothing lower
@@ -95,7 +95,7 @@ disappeared tomorrow, nothing about what is safe to change would move.
 
 ## The repair flow
 
-![The repair flow: upload, read evidence, describe the problem, local Gemma answers, schema check, plan check, patch and render, verify on disk, awaiting review, then a human accepts or rejects](docs/diagrams/repair-flow.svg)
+![The repair flow: upload, read evidence, describe the problem, local Gemma answers, schema check, plan check, patch and render, verify on disk, awaiting review, then a human accepts or rejects](docs/diagrams/repair-flow.png)
 
 Two things in that picture matter more than the rest.
 
@@ -114,7 +114,7 @@ with.
 
 ## Job states
 
-![The eight job states: queued and running, then one of needs clarification, no supported repair, failed, or awaiting review, which a person then accepts or rejects](docs/diagrams/job-states.svg)
+![The eight job states: queued and running, then one of needs clarification, no supported repair, failed, or awaiting review, which a person then accepts or rejects](docs/diagrams/job-states.png)
 
 `awaiting_review` is the best outcome the machine can reach on its own. Getting there
 means a candidate file exists, both sides rendered, and the preservation invariants
@@ -129,7 +129,7 @@ before any bytes are served for download, and download is refused in every other
 
 ## How evidence is resolved
 
-![Four resolution layers, highest first: direct formatting, the style chain, document defaults, and application default meaning unset](docs/diagrams/style-resolution.svg)
+![Four resolution layers, highest first: direct formatting, the style chain, document defaults, and application default meaning unset](docs/diagrams/style-resolution.png)
 
 `python engine.py inspect file.docx` reports, for each top-level body paragraph, both
 the direct formatting as written and the effective value of every supported property,
@@ -155,7 +155,7 @@ style-supplied values as application defaults.
 
 ## Three repairs, and one non-repair
 
-![Four things that look like a page break: a paragraph property, an explicit break element, a section start, and a rendered break that is never removable](docs/diagrams/break-kinds.svg)
+![Four things that look like a page break: a paragraph property, an explicit break element, a section start, and a rendered break that is never removable](docs/diagrams/break-kinds.png)
 
 This is the distinction the whole project is built around. Four different things in the
 file produce the same visible symptom, and a tool that treats them as one thing will
@@ -569,9 +569,8 @@ network.
 | [`START_HERE.md`](START_HERE.md), [`TEST_IT_YOURSELF.md`](TEST_IT_YOURSELF.md) | The five-minute start, and nine prepared documents to try it on. |
 | [`TINKER_NEXT.md`](TINKER_NEXT.md) | The judgement problems left open, and what would have to be true to fix them. |
 
-**Diagrams.** The five SVGs on this page live in [`docs/diagrams/`](docs/diagrams/),
-drawn by hand in the palette from `frontend/docs/DESIGN_SYSTEM.md`. They are text files,
-so a change to one shows up in a diff like any other.
+**Diagrams.** The five PNGs on this page live in [`docs/diagrams/`](docs/diagrams/),
+drawn in the palette from `frontend/docs/DESIGN_SYSTEM.md` and exported at 2x.
 
 ---
 
