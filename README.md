@@ -7,7 +7,7 @@
 <p align="center"><b>Point at the formatting problem. Get a targeted, reviewable repair.</b></p>
 
 <p align="center">
-  <a href="docs/video/what-the-doc.mp4">Watch the demo</a> ·
+  <a href="https://youtu.be/ZTS-tGmwjHE">Watch the demo</a> ·
   <a href="#the-problem">The problem</a> ·
   <a href="#system-architecture">Architecture</a> ·
   <a href="#run-it-locally">Run it locally</a> ·
