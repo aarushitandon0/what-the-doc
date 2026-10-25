@@ -6,18 +6,56 @@
 
 <p align="center"><b>Point at the formatting problem. Get a targeted, reviewable repair.</b></p>
 
-You open a Word document and something is off. A heading floats too far down the page.
-One paragraph is centred when the rest are justified. A page break strands two lines on
-a page of their own. You know what is wrong but not what it is called, and the fix is
-buried three dialogs deep.
+<p align="center">
+  <a href="docs/video/what-the-doc.mp4">Watch the demo</a> ·
+  <a href="#the-problem">The problem</a> ·
+  <a href="#system-architecture">Architecture</a> ·
+  <a href="#run-it-locally">Run it locally</a> ·
+  <a href="CAPABILITIES.md">What it repairs</a> ·
+  <a href="API.md">HTTP API</a>
+</p>
 
-This project takes the complaint in plain language, finds the evidence in the file,
-proposes exactly one bounded change, renders the before and after, checks that nothing
-else moved, and then stops and waits for you. It never accepts its own repair.
+---
 
-A local Gemma does the diagnosis. The document never leaves the machine, there is no
-API key, and the model is only ever allowed to fill in a plan the engine already knew
-how to validate.
+## The problem
+
+You change one line in a Word document and the whole thing rearranges itself. A page
+break appears from nowhere. Paragraphs shift. A heading floats half a page from the
+text it belongs to. There is a blank gap you cannot delete, and none of the settings
+you click seems to be the one responsible.
+
+The symptom is visible; the cause is not. A gap above a heading can be direct spacing,
+a value inherited from a style, a `keep_with_next` chain, an explicit break element or a
+section start: five different things in the file that look identical on the page, each
+fixed from a different dialog. So you work through the ribbon by elimination, and the
+formatting ends up costing more than writing the document did.
+
+## The solution
+
+**What the Doc?!** is a privacy-first formatting assistant for `.docx` files. You upload
+a document, point at the paragraph, and describe what looks wrong in plain language. A
+locally running, open-weight Gemma reads the structured evidence behind that paragraph
+and proposes exactly one bounded change. The service patches a copy, renders before and
+after, re-checks that nothing else in the file moved, and then stops.
+
+A person accepts or rejects. **The tool never accepts its own repair**, and it never
+writes to your original file.
+
+The document never leaves the machine. There is no account, no API key and no upload to
+a third-party service: Gemma runs locally through Ollama, and it is only ever allowed to
+fill in a plan the engine already knew how to validate.
+
+### Why it works this way
+
+Built for the [Hacktoberfest Open-Source AI Challenge, Week 3](https://dev.to/challenges/hf26)
+— theme *Slow and Steady*, 19–25 October 2026 — whose prompt was to use open-source AI
+to automate a task you dread. Word formatting is that task.
+
+Taking "do the tedious work for me" seriously, though, means the tool has to be
+trustworthy enough to be left alone with your file. That is why most of this repository
+is the word **no**: a bounded set of supported edits, a schema the model's answer must
+fit, preservation invariants re-checked against the bytes on disk, and a human gate
+before anything is downloaded. Abstention is a valid answer and is reported as one.
 
 ---
 
@@ -33,7 +71,7 @@ how to validate.
 | [Three repairs, and one non-repair](#three-repairs-and-one-non-repair) | the page-break trap |
 | [Run it locally](#run-it-locally) | five minutes, no model needed |
 | [The live Gemma layer](#the-live-gemma-layer) | setup, prompt, failures, numbers |
-| [The local HTTP API](#the-local-http-api) | what the frontend drives |
+| [The HTTP API](#the-http-api) | what the frontend drives |
 | [Repository layout](#repository-layout) | every file, one line each |
 | [Limits](#limits) | and what this is deliberately not |
 
@@ -81,10 +119,10 @@ paginate alike, so rendered pages stay an approximation.
 
 ![Layered architecture: a React interface over a FastAPI adapter, over the pipeline, over the diagnosis and repair layers, over the core modules, with observability as a leaf](docs/diagrams/architecture.png)
 
-The direction of dependency is the whole design. The HTTP adapter calls the pipeline,
-the pipeline calls diagnosis and workflow, and those call the engine. Nothing lower
-reaches back up, which is why `engine.py inspect` keeps working with no model installed,
-no renderer present and no server running.
+The direction of dependency is the whole design. The HTTP adapter calls the pipeline;
+the pipeline calls the precheck, the diagnosis and the workflow; and those call the
+engine. Nothing lower reaches back up, which is why `engine.py inspect` keeps working
+with no model installed, no renderer present and no server running.
 
 `api.py` is an adapter, not a second engine. Every bound, validator and preservation
 invariant it applies is the one `pipeline.run`, `engine.validate` and
@@ -436,12 +474,12 @@ on the odd-page section. It still never asks for clarification, saying `no_chang
 
 ---
 
-## The local HTTP API
+## The HTTP API
 
 `api.py` is a small FastAPI adapter over the pipeline above, for the React frontend to
-drive. It covers upload, per-paragraph evidence, an asynchronous job with the eight
-states above, before and after preview images, explicit acceptance and a guarded
-download.
+drive. Its eighteen routes cover upload, per-paragraph evidence, an asynchronous job
+with the eight states above, before and after preview images, explicit acceptance and a
+guarded download. It adds no power the command line does not already have.
 
 ```powershell
 pip install -r requirements.txt
@@ -467,8 +505,20 @@ kept strictly apart: an injected diagnosis is refused unless the server was star
 Gemma runtime is reachable a job is refused with `model_unavailable` rather than answered
 from a mock.
 
-It binds to `127.0.0.1` and has **no authentication, no rate limiting, no database and no
-sandbox around LibreOffice. Do not expose it.**
+### Local mode and hosted-demo mode
+
+By default it binds to `127.0.0.1` with **no authentication, no rate limiting, no
+database and no sandbox around LibreOffice**. That is the local development mode, and it
+should not be exposed.
+
+`--public` (or `WTD_PUBLIC=1`) is the hosted-demo mode that the Render blueprint in
+`render.yaml` runs. It still has no accounts. Instead, each browser sends a random
+visitor key so a job list shows only its own jobs, uploads and jobs are rate limited per
+client address, at most three jobs wait at once before a new one is refused with `busy`,
+documents and jobs are deleted after an hour, and fixture injection is forced off. It
+still does not sandbox LibreOffice; the host's container boundary is all there is. This
+is sized for a judged demo of a handful of people, not for a multi-user service.
+[`DEPLOYMENT.md`](DEPLOYMENT.md) states exactly what is built and what is not.
 
 The full contract, with request and response examples, the state table, polling guidance
 for CPU inference and the complete frontend flow, is in [`API.md`](API.md).
@@ -509,6 +559,7 @@ downwards in these tables.
 | --- | --- |
 | `diagnosis.py` | The strict response schema and the named failure codes. It decides what a model answer is not allowed to be. |
 | `gemma_adapter.py` | The prompt builder and the Ollama-compatible client. No file path, raw XML, tool or shell is ever sent. |
+| `precheck.py` | One deterministic rule that runs before the model is asked: a spacing complaint about a paragraph that has no spacing of its own. Its only possible answer is `no_change`, so it can never put an edit in front of anyone; in every other situation it returns nothing and the model is asked as before. |
 | `pipeline.py` | The vertical slice: complaint to diagnosis to validated plan to rendered candidate to review status. Adds no powers the engine does not already have. |
 
 **The service and its tracing**
@@ -525,6 +576,8 @@ downwards in these tables.
 | `fixtures.py` | The Word-openable four-page sample carrying three labelled faults, each recording the repair a correct diagnosis should reach. |
 | `eval_fixtures.py` | The second sample, carrying the cases a diagnosis must get right, including the ones it should decline. |
 | `break_fixtures.py` | Real packages carrying explicit run breaks: manual page breaks (two in a single paragraph, plus unsupported contexts and a line break), a genuinely two-column document with a manual column break, and a two-section document. Kept separate from `fixtures.py`, because a `page_break_before` document is not evidence about an explicit break. |
+| `section_fixtures.py` | Word-openable documents carrying more than one section, kept separate again because a section start is a third distinct thing from a `page_break_before` and from an explicit break. |
+| `make_test_documents.py` | Writes `test-documents/` and its manifest. The files are committed, so a tester never runs this; it exists so the manifest is computed from the documents rather than written by hand. |
 | `demo.py` | The Milestone B walkthrough: evidence, the single expected repair, before and after render, and what changed. |
 | `live_eval.py` | The live grading run. Deliberately not a unittest module, because the deterministic suite must pass with no model installed. |
 | `word_check.py`, `word_check.ps1` | Optional, Windows-only cross-check of the resolver against Word's own effective formatting. |
@@ -541,10 +594,14 @@ network.
 | `test_api.py` | The HTTP contract, the state table and the acceptance boundary, with the model unreachable by construction. |
 | `test_api_noop.py` | Effective no-op rejection through the review boundary, inspecting actual candidate DOCX bytes. |
 | `test_api_render.py` | Renderer failures staying failed jobs rather than becoming approvable repairs. |
+| `test_precheck.py`, `test_alignment_rule.py` | The two deterministic rules: what each one answers, and the far larger set of situations where it declines and the model is asked instead. |
 | `test_structure.py` | Break and section inspection, target identity and staleness, the removal itself, the narrowed invariants, and rendered demonstrations. |
 | `test_api_breaks.py` | The two inspection endpoints, break selection and its refusals, and the server-side rendering requirement at review, acceptance and download. |
 | `test_observability*.py`, `test_api_observability.py` | Real SDK envelopes captured by a test transport, checked for span shape and for the absence of document content. |
-| `test_eval_fixtures.py` | That the evaluation's cases really are the situations its manifest claims. |
+| `test_sections.py`, `test_api_sections.py` | The one supported section mutation, in the core and then at the HTTP boundary, with every diagnosis there labelled as an injected fixture. |
+| `test_api_document_breaks.py`, `test_api_document_preview.py` | Whole-document break repair answered by `precheck` rather than the model, and the requirement that an uploaded document is viewable before anything is proposed. |
+| `test_api_public.py` | Public mode: the visitor scoping, rate limits, queue cap and retention that stand in for accounts, and the refusal of fixture injection. |
+| `test_eval_fixtures.py`, `test_live_eval.py`, `test_test_documents.py` | That the evaluation's cases really are the situations its manifest claims, that the grader's bookkeeping holds offline, and that the committed hand-testing kit agrees with its manifest from any clone. |
 
 **The interface**
 
@@ -565,11 +622,12 @@ network.
 | [`TEST_RESULTS.md`](TEST_RESULTS.md) | What each run actually established, with live results kept apart from deterministic ones. |
 | [`IDEATION.md`](IDEATION.md) | The product and implementation plan, including the hardening this prototype does not implement. |
 | [`OBSERVABILITY.md`](OBSERVABILITY.md), [`SENTRY_SETUP.md`](SENTRY_SETUP.md) | Span map, privacy rules, configuration, and what hosted verification is still missing. |
-| [`DEPLOYMENT.md`](DEPLOYMENT.md) | What can and cannot be deployed today, and why. |
+| [`DEPLOYMENT.md`](DEPLOYMENT.md) | The three ways to run it: local (working), the Render blueprint in public mode (configured), and a multi-user service (not built). |
 | [`START_HERE.md`](START_HERE.md), [`TEST_IT_YOURSELF.md`](TEST_IT_YOURSELF.md) | The five-minute start, and nine prepared documents to try it on. |
 | [`TINKER_NEXT.md`](TINKER_NEXT.md) | The judgement problems left open, and what would have to be true to fix them. |
 
-**Diagrams.** The five PNGs on this page live in [`docs/diagrams/`](docs/diagrams/),
+**Media.** The demo recording is [`docs/video/what-the-doc.mp4`](docs/video/what-the-doc.mp4).
+The five PNGs on this page live in [`docs/diagrams/`](docs/diagrams/),
 drawn in the palette from `frontend/docs/DESIGN_SYSTEM.md` and exported at 2x.
 
 ---
@@ -596,7 +654,8 @@ authentication first.
 Rendering runs LibreOffice with a throwaway user profile and a timeout, and passes the
 document as an argument vector, never through a shell. The container, dropped privileges,
 blocked outbound network and resource caps described in `IDEATION.md` section 9 are
-**not** implemented, so this is for local development only. Each conversion uses fresh
+**not** implemented. The hosted-demo container relies on the host's own boundary and
+nothing more, which is why it is sized for a judged demo rather than for public use. Each conversion uses fresh
 staging output, so a failed retry cannot reuse an older PDF. A missing renderer still
 permits structural review with `visual_comparison: null`, and acceptance is then
 permitted without previews, so the reviewer has to open the DOCX in Word. A renderer that
@@ -620,10 +679,10 @@ contents of someone's file, so the directory is ignored whole, and `*.docx`, `*.
 the image extensions are ignored repository-wide as a second line of defence. A
 screenshot of a synthetic fixture worth keeping has to be added on purpose with
 `git add -f`, which is the intended friction: no sweep of untracked files can ever commit
-a page rendered from a real document. The standing exceptions are the interface's own
-artwork in `frontend/public/` and the bundled Rubik fonts in `frontend/src/assets/`,
-re-included explicitly. The diagrams on this page are SVG, which the image rule does not
-cover and which reads as text anyway.
+a page rendered from a real document. Three things are re-included explicitly: the five
+diagrams on this page in `docs/diagrams/`, the interface’s own artwork in
+`frontend/public/`, and the bundled Rubik fonts in `frontend/src/assets/`. All of them
+are drawn or licensed for this project, and none is rendered from a document.
 
 **Anything large and not ours stays out.** `.venv/` and `node_modules/` are reproducible
 from `requirements.txt` and `package-lock.json`. `.tools/` holds the unpacked LibreOffice
