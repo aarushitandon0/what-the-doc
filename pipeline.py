@@ -58,8 +58,12 @@ def _validate_plan(source, plan):
 
 def run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
         do_render=True, model=None, timeout=None, context=1, break_target_id=None,
-        section_target_id=None, use_precheck=True):
+        section_target_id=None, use_precheck=True, scope='paragraph'):
     """Trace one finite repair; the API worker's enclosing trace is reused.
+
+    `scope='document'` answers a whole-document complaint about unwanted page breaks
+    with precheck.unwanted_page_breaks instead of the model. It still produces only a
+    candidate for review, through the same validation, invariants and render.
 
     `use_precheck=False` always asks the model; the live evaluation uses it so that it
     keeps measuring the model, not the rule that runs in front of it.
@@ -70,7 +74,8 @@ def run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
         report = _run(source, paragraph_id, complaint, work_dir, diagnoser=diagnoser,
                       mode=mode, do_render=do_render, model=model, timeout=timeout,
                       context=context, break_target_id=break_target_id,
-                      section_target_id=section_target_id, use_precheck=use_precheck)
+                      section_target_id=section_target_id, use_precheck=use_precheck,
+                      scope=scope)
         trace.set(outcome=report['outcome'], error_code=report.get('error_code'),
                   operation_kind=report.get('operation_kind'))
         return report
@@ -78,7 +83,7 @@ def run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
 
 def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
          do_render=True, model=None, timeout=None, context=1, break_target_id=None,
-         section_target_id=None, use_precheck=True):
+         section_target_id=None, use_precheck=True, scope='paragraph'):
     """Diagnose one complaint and, if a repair is proposed, build a candidate to review.
 
     `diagnoser` is the injection point for deterministic tests: a callable
@@ -113,6 +118,7 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
         # about one of them at a time.
         'section_target_id': section_target_id,
         'operation_kind': None,
+        'scope': scope,
         # The user's own complaint is recorded because the result cannot be read
         # without it. Document text is not: the diagnosis cites ids and fields.
         'complaint': complaint,
@@ -145,7 +151,23 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
     stage('selected')
     started = time.monotonic()
     ruled = None
-    if live_model and use_precheck:
+    if scope == 'document':
+        found_rule = precheck.unwanted_page_breaks(source, complaint)
+        if found_rule is None:
+            return fail(diagnosis.INVALID_SELECTION,
+                        'A whole-document repair is only offered for unwanted page or '
+                        'column breaks, and this document has none this version can '
+                        'remove.')
+        found, kept = found_rule
+        report['answered_by'] = 'rule'
+        report['kept_breaks'] = kept
+        report['diagnosis'] = found
+        report['diagnosis_metadata'] = {
+            'model': None, 'rule': precheck.DOCUMENT_BREAKS_RULE, 'answered_by': 'rule',
+            'latency_seconds': round(time.monotonic() - started, 3),
+            'attempts': 0, 'max_attempts': 0, 'discarded_attempts': []}
+        stage('diagnosed')
+    elif live_model and use_precheck:
         # A deterministic check for the one situation the model measurably gets wrong:
         # a spacing complaint about a paragraph that has no spacing of its own. It can
         # only answer "no_change", never propose an edit, and says so in the report.
@@ -168,25 +190,27 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
                           'nothing of its own to repair. No candidate exists.')
         stage(ruled['status'])
         return _finish(report, work_dir)
-    try:
-        with observability.span('diagnosis.execute') as trace:
-            found, metadata = diagnoser(source, complaint, paragraph_id)
-            trace.set(model=(metadata or {}).get('model'))
-    except diagnosis.DiagnosisError as error:
-        report['diagnosis_metadata'] = {
-            'latency_seconds': round(time.monotonic() - started, 3),
-            # A failed run says how many draws it took to fail, so a persistent fault
-            # is distinguishable from one unlucky sample after the fact.
-            'attempts': error.attempts, 'max_attempts': error.max_attempts,
-            'discarded_attempts': list(error.discarded_attempts)}
-        return fail(error.code, error.message)
-    except RuntimeError as error:
-        # An unconfigured model is a missing model, not a crash.
-        report['diagnosis_metadata'] = {'latency_seconds': round(time.monotonic() - started, 3)}
-        return fail(diagnosis.MODEL_UNAVAILABLE, str(error))
-    report['diagnosis'] = found
-    report['diagnosis_metadata'] = metadata
-    stage('diagnosed')
+    if scope != 'document':
+        try:
+            with observability.span('diagnosis.execute') as trace:
+                found, metadata = diagnoser(source, complaint, paragraph_id)
+                trace.set(model=(metadata or {}).get('model'))
+        except diagnosis.DiagnosisError as error:
+            report['diagnosis_metadata'] = {
+                'latency_seconds': round(time.monotonic() - started, 3),
+                # A failed run says how many draws it took to fail, so a persistent
+                # fault is distinguishable from one unlucky sample after the fact.
+                'attempts': error.attempts, 'max_attempts': error.max_attempts,
+                'discarded_attempts': list(error.discarded_attempts)}
+            return fail(error.code, error.message)
+        except RuntimeError as error:
+            # An unconfigured model is a missing model, not a crash.
+            report['diagnosis_metadata'] = {
+                'latency_seconds': round(time.monotonic() - started, 3)}
+            return fail(diagnosis.MODEL_UNAVAILABLE, str(error))
+        report['diagnosis'] = found
+        report['diagnosis_metadata'] = metadata
+        stage('diagnosed')
 
     if found['status'] in ABSTAINED:
         # An abstention is a complete, honest answer. It produces no candidate, so

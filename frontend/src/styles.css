@@ -108,3 +108,7 @@
 .tech-details{margin-top:16px;font-size:.8rem;color:#4a5750}
 .tech-details summary{cursor:pointer;font-weight:600}
 .tech-details p{margin:.4rem 0;word-break:break-word}
+
+/* Download first: once a repair is accepted the file is the point, so it sits above the receipt and the pages. */
+.top-actions{margin:8px 0 28px}
+.review-heading .top-actions{justify-content:flex-start;margin:18px 0 0}

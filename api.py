@@ -51,6 +51,7 @@ import engine
 import gemma_adapter
 import observability
 import pipeline
+import precheck
 import render as render_module
 import workflow
 
@@ -114,6 +115,7 @@ NOT_FOUND = 'not_found'
 INVALID_STATE = 'invalid_state'
 CANDIDATE_INTEGRITY_FAILED = 'candidate_integrity_failed'
 FIXTURE_MODE_DISABLED = 'fixture_mode_disabled'
+NO_DOCUMENT_REPAIR = 'no_document_repair'
 
 
 # ---------------------------------------------------------------------------
@@ -196,6 +198,11 @@ def _public_job(job):
                                                      else 'fixture'),
         'is_live_model_answer': job['mode'] == LIVE and report.get('answered_by') != 'rule',
         'paragraph_id': job['paragraph_id'],
+        # 'document' for a whole-document break repair, which may change several
+        # paragraphs; paragraph_id is then only the first of them.
+        'scope': job.get('scope', 'paragraph'),
+        # Breaks of the named kind the whole-document repair leaves, each with why.
+        'kept_breaks': report.get('kept_breaks') or [],
         'created_at': job['created_at'],
         'updated_at': job['updated_at'],
         'accepted': job['state'] == ACCEPTED,
@@ -663,7 +670,8 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
                 mode=job['mode'], do_render=job['render'],
                 model=job['model'], timeout=job['timeout'],
                 break_target_id=job.get('break_target_id'),
-                section_target_id=job.get('section_target_id'))
+                section_target_id=job.get('section_target_id'),
+                scope=job.get('scope', 'paragraph'))
         except Exception as error:                     # pragma: no cover - defensive
             job['state'] = FAILED
             job['report'] = {'outcome': pipeline.FAILED,
@@ -710,6 +718,11 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             raise ApiError(400, 'invalid_request', 'Expected a JSON object')
         document_id = payload.get('document_id')
         record = _document(document_id)
+        scope = payload.get('scope', 'paragraph')
+        if scope not in ('paragraph', 'document'):
+            raise ApiError(400, 'invalid_request', "scope must be 'paragraph' or 'document'")
+        if scope == 'document':
+            return _create_document_job(payload, document_id, record)
         paragraph_id = payload.get('paragraph_id')
         if type(paragraph_id) is not int or paragraph_id < 0:
             raise ApiError(400, diagnosis.INVALID_SELECTION,
@@ -820,6 +833,58 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             store.jobs[job_id] = job
         app.state.executor.submit(_run_job, job_id)
         log.info('job queued id=%s document=%s mode=%s', job_id, document_id, mode)
+        return _public_job(job)
+
+    def _create_document_job(payload, document_id, record):
+        """Queue one whole-document repair: every unwanted page or column break at once.
+
+        Answered by precheck.unwanted_page_breaks, not the model, and only for that one
+        complaint. Anything else is refused with `no_document_repair` *before* a job
+        exists, so the client can fall back to checking paragraph by paragraph. The job
+        then runs the same pipeline: validation, invariants, render, human review.
+        """
+        complaint = payload.get('complaint')
+        if not isinstance(complaint, str) or not complaint.strip():
+            raise ApiError(400, diagnosis.INVALID_SELECTION,
+                           'A complaint describing the problem is required')
+        if len(complaint) > MAX_COMPLAINT_CHARS:
+            raise ApiError(400, diagnosis.INVALID_SELECTION,
+                           'complaint exceeds %d characters' % MAX_COMPLAINT_CHARS)
+        expected = payload.get('expected_source_sha256')
+        if expected is not None and expected != record['source_sha256']:
+            raise ApiError(409, INVALID_STATE,
+                           'expected_source_sha256 does not match this document')
+        if payload.get('fixture_diagnosis') is not None or                 payload.get('break_target_id') is not None or                 payload.get('section_target_id') is not None:
+            raise ApiError(400, 'invalid_request',
+                           'A whole-document repair takes no break, section or '
+                           'injected diagnosis')
+        with observability.span('structure.inspect'):
+            ruled = precheck.unwanted_page_breaks(store.document_path(document_id),
+                                                  complaint)
+        if ruled is None:
+            raise ApiError(422, NO_DOCUMENT_REPAIR,
+                           'No whole-document repair applies: it is offered only for '
+                           'unwanted page or column breaks that this version can '
+                           'remove. Check paragraph by paragraph instead.')
+        first = min(op['paragraph_id'] for op in ruled[0]['evidence'])
+        job_id = store.new_id()
+        job = {
+            'job_id': job_id, 'document_id': document_id,
+            'source_path': str(store.document_path(document_id)),
+            'source_sha256': record['source_sha256'],
+            'paragraph_id': first, 'complaint': complaint, 'scope': 'document',
+            'mode': LIVE, 'state': QUEUED,
+            'render': bool(payload.get('render', True)),
+            'model': None, 'timeout': None,
+            'break_target_id': None, 'section_target_id': None,
+            'created_at': time.time(), 'updated_at': time.time(),
+            'report': None, 'preview_index': None, 'decision': None,
+            '_diagnoser': None,
+        }
+        with store.lock:
+            store.jobs[job_id] = job
+        app.state.executor.submit(_run_job, job_id)
+        log.info('job queued id=%s document=%s scope=document', job_id, document_id)
         return _public_job(job)
 
     def _job(job_id):

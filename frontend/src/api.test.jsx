@@ -647,7 +647,10 @@ describe('choosing what to check',()=>{
   };
   let inFlight=0,maxInFlight=0;
   const {calls}=await open({
-   'POST /api/jobs':(options)=>{const body=JSON.parse(options.body);inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);return {...outcome[JOB[body.paragraph_id]],state:'queued'};},
+   'POST /api/jobs':(options)=>{const body=JSON.parse(options.body);
+    // Not a break complaint, so the one-shot whole-document repair does not apply.
+    if(body.scope==='document')return {__status:422,body:{error_code:'no_document_repair',detail:'No whole-document repair applies'}};
+    inFlight++;maxInFlight=Math.max(maxInFlight,inFlight);return {...outcome[JOB[body.paragraph_id]],state:'queued'};},
    [`GET /api/jobs/${JOB[1]}`]:()=>{inFlight=0;return outcome[JOB[1]];},
    [`GET /api/jobs/${JOB[2]}`]:()=>{inFlight=0;return outcome[JOB[2]];},
   });
@@ -658,6 +661,9 @@ describe('choosing what to check',()=>{
   expect(await screen.findByText(/2 of 2 checked/,{},{timeout:10000})).toBeInTheDocument();
   // One job per paragraph, the same request a single paragraph sends, never two at once.
   const posted=calls.filter(c=>c.key==='POST /api/jobs').map(c=>JSON.parse(c.options.body));
+  // The whole-document repair is asked first and declines; then one job per paragraph.
+  expect(posted[0]).toMatchObject({scope:'document'});
+  posted.shift();
   expect(posted.map(b=>b.paragraph_id)).toEqual([1,2]);
   posted.forEach(b=>expect(b).toMatchObject({document_id:DOCUMENT.document_id,expected_source_sha256:'ca278f'}));
   expect(maxInFlight).toBe(1);
@@ -671,6 +677,46 @@ describe('choosing what to check',()=>{
   expect(screen.getByText('No safe fix found')).toBeInTheDocument();
   await act(async()=>{fireEvent.click(screen.getByText('No safe fix found').closest('button'));});
   expect(await screen.findByRole('heading',{name:/No safe fix\s*found\./})).toBeInTheDocument();
+ },30000);
+});
+
+/* "Page breaks I didn't want" over the whole document is one repair, not one per
+ * paragraph: every removable break goes in a single candidate, reviewed once. */
+describe('unwanted page breaks across the whole document',()=>{
+ it('removes them all in one reviewed change, says which stay, and puts the download first',async()=>{
+  const ops=[{operation:'remove_explicit_break',target_id:'brk-a',expected_break_type:'page'},{operation:'remove_explicit_break',target_id:'brk-b',expected_break_type:'page'}];
+  const whole={...REVIEWABLE,scope:'document',answered_by:'rule',is_live_model_answer:false,model:null,operation_kind:'explicit_break_removal',
+   diagnosis:{status:'proposed',explanation:'You said these breaks are unwanted. This removes all 2 page breaks this version can safely remove.',evidence:[],question:null},
+   proposal:{source_sha256:'ca278f',schema_version:2,operations:ops},
+   break_targets:[{target_id:'brk-a',break_type:'page',paragraph_id:1,text_before:'one',text_after:'two'},{target_id:'brk-b',break_type:'page',paragraph_id:2,text_before:'three',text_after:'four'}],
+   kept_breaks:[{paragraph_id:null,break_type:'page',text_after:'In a table cell.',reason:'The break sits inside a table.'}]};
+  const {calls}=mockApi({
+   'POST /api/jobs':()=>({...whole,state:'queued',diagnosis:null,proposal:null,preview:null}),
+   [`GET /api/jobs/${REVIEWABLE.job_id}`]:()=>whole,
+   [`POST /api/jobs/${REVIEWABLE.job_id}/accept`]:()=>({...whole,state:'accepted',accepted:true}),
+  });
+  render(<App/>);
+  act(()=>{window.location.hash='upload';window.dispatchEvent(new HashChangeEvent('hashchange'));});
+  await screen.findByText(/CONNECTED/);
+  fireEvent.click(await screen.findByRole('button',{name:/Build the sample/}));
+  await screen.findByText(/IN THIS DOCUMENT/);
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Check every paragraph/}));});
+  fireEvent.change(screen.getByLabelText('What looks wrong?'),{target:{value:'There are page breaks that i didnt want'}});
+  await act(async()=>{fireEvent.click(screen.getByRole('button',{name:/Check all 2 paragraphs/}));});
+  expect(await screen.findByRole('heading',{name:/A candidate\s*to review\./})).toBeInTheDocument();
+  const posted=calls.filter(c=>c.key==='POST /api/jobs').map(c=>JSON.parse(c.options.body));
+  expect(posted).toHaveLength(1);
+  expect(posted[0]).toMatchObject({scope:'document',complaint:'There are page breaks that i didnt want'});
+  expect(posted[0].paragraph_id).toBeUndefined();
+  expect(screen.getByText('THE 2 BREAKS BEING REMOVED')).toBeInTheDocument();
+  expect(screen.getByText('ONE BREAK STAYS')).toBeInTheDocument();
+  expect(screen.getByText(/NO MODEL USED/)).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('link',{name:/Review the change/}));
+  expect(await screen.findByRole('heading',{name:/2 breaks removed\./})).toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button',{name:/Accept this repair/}));
+  // The download comes before the receipt and the page comparison, not after them.
+  const download=await screen.findByRole('link',{name:/Download repaired .docx/});
+  expect(download.compareDocumentPosition(screen.getByAltText('Before page 1'))&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
  },30000);
 });
 

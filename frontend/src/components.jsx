@@ -141,11 +141,25 @@ export function BreakSelector({report, paragraphId, selectedId, onSelect, disabl
 export function BreakTargetList({job}){
  const targets=job?.break_targets;
  if(!targets?.length) return null;
- return <div className="break-panel"><span className="eyebrow">THE BREAK BEING REMOVED</span>
+ const many=targets.length>1;
+ return <div className="break-panel"><span className="eyebrow">{many?`THE ${targets.length} BREAKS BEING REMOVED`:'THE BREAK BEING REMOVED'}</span>
   {targets.map((t,i)=><div className="break-target" key={t.target_id||i}>
    <strong>{breakLabel(t)}</strong>
    <span className="break-context"><i>…{t.text_before||'(start of paragraph)'}</i><em>↵ this break ↵</em><i>{t.text_after||'(end of paragraph)'}…</i></span>
-   <small>Only this <code>w:br</code> element is deleted. The run holding it, its formatting, the text either side and every other break stay as they are.</small>
+   {!many&&<small>Only this <code>w:br</code> element is deleted. The run holding it, its formatting, the text either side and every other break stay as they are.</small>}
+  </div>)}
+  {many&&<small>Only these <code>w:br</code> elements are deleted. Every run, its formatting and all the text stay exactly as they are.</small>}</div>;
+}
+
+/** Breaks a whole-document repair leaves in place, each with the reason. Shown so a
+ *  page that still breaks after the repair is explained, not a surprise. */
+export function KeptBreaks({job}){
+ const kept=job?.kept_breaks;
+ if(!kept?.length) return null;
+ return <div className="break-panel"><span className="eyebrow">{kept.length===1?'ONE BREAK STAYS':`${kept.length} BREAKS STAY`}</span>
+  {kept.map((k,i)=><div className="break-target" key={i}>
+   <strong>{k.paragraph_id==null?'Inside a table':`¶${k.paragraph_id}`} · {k.break_type} break{k.text_after?` before “${k.text_after}”`:''}</strong>
+   <small>{k.reason} Remove it by hand in Word if you don’t want it.</small>
   </div>)}</div>;
 }
 

@@ -1,6 +1,6 @@
 import React,{useState,useEffect,useRef,useCallback} from 'react';
 import {ArrowUpRight,ArrowLeft,Check,FileText,Upload,Plus,Minus,X,ShieldCheck,Download,Clock,AlertCircle} from 'lucide-react';
-import {Header,Footer,DemoBanner,Steps,Badge,Button,PageHeading,Paper,Empty,ConnectionBanner,ApiErrorNote,JobProgress,PreviewPages,PropertyList,InvariantList,ModeBadge,OfflineHold,BreakSelector,BreakTargetList,PageCountChange,SectionList,SectionTargetList,DocxPages,TechDetails} from './components';
+import {Header,Footer,DemoBanner,Steps,Badge,Button,PageHeading,Paper,Empty,ConnectionBanner,ApiErrorNote,JobProgress,PreviewPages,PropertyList,InvariantList,ModeBadge,OfflineHold,BreakSelector,BreakTargetList,KeptBreaks,PageCountChange,SectionList,SectionTargetList,DocxPages,TechDetails} from './components';
 import {paragraphs,validateFile,readHistory,report} from './data';
 import * as api from './api';
 
@@ -175,6 +175,18 @@ export default function App(){
   if(!complaint.trim()){notify('Tell us what looks wrong first.');document.getElementById('complaint')?.focus();return;}
   if(!scanTargets.length){notify('This document has no paragraphs with text to check.');return;}
   const documentId=doc.document_id,text=complaint;
+  /* Unwanted page breaks are fixed across the whole document in ONE candidate: the
+   * server lists every break itself, so no paragraph-by-paragraph guessing and no
+   * separate fixes to stitch together. Anything else falls through to the scan. */
+  setApiError(null);setBusy('diagnosing');
+  try{
+   const started=await api.createJob({documentId,complaint:text,scope:'document',render:backend.health?.renderer?.available!==false,expectedSourceSha256:doc.source_sha256});
+   setScan(null);setWholeDoc(false);setLiveSelected(null);setSelectedBreak(null);setSelectedSection(null);
+   setJob(started);setBusy('');watch(started);return;
+  }catch(error){
+   setBusy('');
+   if(error?.code!=='no_document_repair'){fail(error);return;}
+  }
   abort.current?.abort();scanAbort.current?.abort();
   const controller=new AbortController();scanAbort.current=controller;scanStop.current=false;
   const items=scanTargets.map(p=>({paragraph_id:p.paragraph_id,state:'waiting',job:null,error:null}));
@@ -305,6 +317,7 @@ export default function App(){
    <p>{job.diagnosis?.explanation}</p>
    <div className="property-table">{proposalRows.map((op,i)=><div key={i}><span>{opLabel(op)}</span><strong>{opValue(op)}</strong></div>)}</div>
    <BreakTargetList job={job}/>
+   <KeptBreaks job={job}/>
    <SectionTargetList job={job}/>
    <InvariantList job={job}/>
    <p className="fineprint">Reaching this state is not approval. Nothing of yours has been changed.</p>
@@ -443,7 +456,7 @@ export default function App(){
    <aside className="inspector">{liveInspector()}</aside></div></>;
 
  const liveReview=()=>['awaiting_review','accepted','rejected'].includes(job?.state)
-  ?<><div className="review-heading"><div><a className="backlink" href="#workspace"><ArrowLeft/> Back to workspace</a><h1>Same words.<br/><span>{reviewHeadline[job.operation_kind]||'One reviewed change.'}</span></h1>
+  ?<><div className="review-heading"><div><a className="backlink" href="#workspace"><ArrowLeft/> Back to workspace</a><h1>Same words.<br/><span>{job.scope==='document'?`${proposalRows.length} break${proposalRows.length===1?'':'s'} removed.`:reviewHeadline[job.operation_kind]||'One reviewed change.'}</span></h1>
      <p>{job.diagnosis?.explanation}</p><ModeBadge job={job}/></div>
     <div className="segmented" aria-label="Comparison view">{[['side','Side by side'],['original','Original'],['proposed','Proposed']].map(([v,t])=><button key={v} aria-pressed={view===v} onClick={()=>setView(v)}>{t}</button>)}</div></div>
    <ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>
@@ -454,6 +467,7 @@ export default function App(){
    <p className="fineprint">{job.preview?.note} Changed-pixel ratios are a review signal, not approval: a correct repair legitimately reflows later text.</p>
    <PageCountChange job={job}/>
    <BreakTargetList job={job}/>
+   <KeptBreaks job={job}/>
    <SectionTargetList job={job}/>
    <InvariantList job={job}/>
    <div className="review-bar"><div><Badge>{proposalRows.length} TARGETED CHANGE{proposalRows.length===1?'':'S'}</Badge>
@@ -469,6 +483,8 @@ export default function App(){
  const liveResults=()=>job?.state==='accepted'
   ?<><div className="completion-icon"><Check/></div>
    <PageHeading eyebrow="THAT’S ONE LESS THING." description="The preservation invariants were re-run against the files on disk before the state changed.">Back to<br/>doing less.</PageHeading>
+   <div className="result-actions top-actions"><a className="button primary" href={api.downloadUrl(job.job_id)} download>Download repaired .docx <Download/></a>
+    <a className="button outline" href="#upload">Another document <Plus/></a></div>
    <div className="receipt"><div className="receipt-head"><FileText/><div><strong>repaired-{job.job_id.slice(0,8)}.docx</strong><small>job {job.job_id}</small></div><Badge>ACCEPTED</Badge></div>
     {proposalRows.map((op,i)=><div className="receipt-row" key={i}><span>{opLabel(op)}</span><strong>{opValue(op)}</strong></div>)}
     <div className="receipt-row"><span>Candidate sha256</span><strong>{job.candidate?.candidate_sha256?.slice(0,16)}…</strong></div>
@@ -478,8 +494,6 @@ export default function App(){
    {previewReady&&<div className="comparison results-comparison">
     <section><div className="compare-label">BEFORE <small>{pageCount(job.preview.before_page_count)}</small></div><PreviewPages urls={job.preview.before_urls||[]} label="Before"/></section>
     <section><div className="compare-label green">AFTER <small>{pageCount(job.preview.after_page_count)}</small></div><PreviewPages urls={job.preview.after_urls||[]} label="After" comparison={job.visual_comparison?.pages}/></section></div>}
-   <div className="result-actions"><a className="button primary" href={api.downloadUrl(job.job_id)} download>Download repaired .docx <Download/></a>
-    <a className="button outline" href="#upload">Another document <Plus/></a></div>
    <p className="fineprint">The integrity check runs once more as the bytes are served. Your original is untouched and is always the undo path.</p>
    <a className="backlink" href="#review">Compare the pages again</a></>
   :<Empty title="A preview isn’t an approval." onSample={openDemoDocument}>Accept a reviewed candidate to download a repaired document.</Empty>;

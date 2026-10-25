@@ -370,6 +370,30 @@ Only the selected section's id is shown to the model. A diagnosis naming any oth
 section — even a real, eligible one — is refused as a fabrication, exactly as an
 unsupplied break id is.
 
+### Whole document: unwanted page breaks — `scope: "document"`
+
+```json
+{"document_id": "…", "scope": "document",
+ "complaint": "There are page breaks that I didn't want", "render": true}
+```
+
+No `paragraph_id`. When the complaint is about unwanted page (or column) breaks, every
+break of that kind with `edit_eligible: true` is removed in **one** candidate (at most
+12). It is answered by a fixed rule (`precheck.unwanted_page_breaks`), not the model:
+`answered_by: "rule"`, `is_live_model_answer: false`. The candidate goes through the
+same `engine.validate`, preservation invariants, render and human acceptance as any
+other job. The job carries `scope: "document"`, `paragraph_id` is the first paragraph
+touched, and `kept_breaks` lists each break of that kind that stays, with the reason
+(inside a hyperlink, inside a table, …).
+
+Any other complaint (including asking to *add* a break) is refused before a job exists
+with **422 `no_document_repair`**; the client then checks paragraph by paragraph.
+`break_target_id`, `section_target_id` or `fixture_diagnosis` with this scope → 400.
+
+Why a rule: measured on a real upload, asking the model paragraph by paragraph removed
+one of three removable page breaks, failed on the paragraph holding the other two, and
+proposed *adding* a page break to the heading.
+
 CPU inference on this machine can take **several minutes per call**, so this is
 asynchronous by necessity rather than by taste. One job runs at a
 time; a second request genuinely waits in `queued`.

@@ -93,11 +93,12 @@ export async function getOriginal(documentId, signal) {
 export const getPeers =(documentId, paragraphId, signal) =>
   request(`/api/documents/${id(documentId)}/paragraphs/${id(paragraphId)}/peers`, {signal});
 
-export const createJob = ({documentId, paragraphId, complaint, render = true, expectedSourceSha256, model, timeout, breakTargetId, sectionTargetId}, signal) =>
+export const createJob = ({documentId, paragraphId, complaint, render = true, expectedSourceSha256, model, timeout, breakTargetId, sectionTargetId, scope}, signal) =>
   request('/api/jobs', {
     ...json({
       document_id: documentId,
-      paragraph_id: paragraphId,
+      // A whole-document job names no paragraph: the server finds the breaks itself.
+      ...(scope === 'document' ? {scope} : {paragraph_id: paragraphId}),
       complaint,
       render,
       ...(breakTargetId ? {break_target_id: breakTargetId} : {}),
