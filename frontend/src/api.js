@@ -15,10 +15,26 @@ export class ApiError extends Error {
   }
 }
 
-async function request(path, {signal, ...options} = {}) {
+/** A random key for this browser, so a hosted server shows each visitor only their own
+ * job history. It is not a login and proves nothing; it only scopes a list. */
+const VISITOR_KEY = 'wtd-visitor';
+let visitor = null;
+export const visitorId = () => {
+  if (visitor) return visitor;
+  try { visitor = window.localStorage.getItem(VISITOR_KEY); } catch { /* storage blocked */ }
+  if (!/^[0-9a-f]{32}$/.test(visitor || '')) {
+    const bytes = new Uint8Array(16);
+    crypto.getRandomValues(bytes);
+    visitor = Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
+    try { window.localStorage.setItem(VISITOR_KEY, visitor); } catch { /* per-tab only */ }
+  }
+  return visitor;
+};
+
+async function request(path, {signal, headers, ...options} = {}) {
   let response;
   try {
-    response = await fetch(`${API_BASE}${path}`, {...options, signal});
+    response = await fetch(`${API_BASE}${path}`, {...options, headers: {...headers, 'X-WTD-Visitor': visitorId()}, signal});
   } catch (cause) {
     if (cause?.name === 'AbortError') throw cause;
     throw new ApiError('The local API is not reachable.', {code: 'backend_unreachable', detail: String(cause?.message || cause)});
@@ -152,6 +168,8 @@ export const ERROR_TEXT = {
   backend_unreachable: 'The local API at ' + (API_BASE || 'this origin') + ' is not responding. Start it with: python api.py --cors http://localhost:5173',
   unsupported_upload: 'That file could not be opened as a plain .docx. Tracked changes, content controls, macros and signed packages are refused.',
   upload_too_large: 'That document is over 20 MB.',
+  busy: 'Other people are using the demo right now, and each diagnosis takes a minute or more. Try again in a minute or two.',
+  rate_limited: 'Too many requests from your connection in the last hour. Try again a little later.',
   not_found: 'The server does not know about that document or job any more. It forgets jobs when it restarts.',
   invalid_selection: 'Choose a paragraph and describe what looks wrong.',
   model_unavailable: 'No Gemma runtime is available, so nothing can be diagnosed. Nothing is substituted in its place.',

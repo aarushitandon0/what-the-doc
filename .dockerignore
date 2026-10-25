@@ -1,0 +1,16 @@
+# Keep the build context small and free of anything private or machine-specific.
+.git
+.venv
+.tools
+.agents
+work
+scratch
+tmp
+**/__pycache__
+**/node_modules
+frontend/dist
+*.log
+*.pdf
+.env
+.env.*
+submission

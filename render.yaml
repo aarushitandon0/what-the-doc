@@ -1,41 +1,27 @@
-# Render Blueprint for the PUBLIC STATIC DEMO only.
+# Render Blueprint for the FULL APPLICATION: Ollama with gemma4:e2b, LibreOffice, the
+# Python API and the React interface, in one Docker container. See DEPLOYMENT.md.
 #
-# This deploys the React interface as static files. It deploys no Python, no model
-# and no renderer, so the hosted site cannot diagnose or repair a real document: it
-# runs in the interface's explicitly labelled sample mode. See DEPLOYMENT.md part B.
+# Plan: 4c-8g (4 CPU, 8 GB, formerly "Pro Plus"). The model alone needs ~5-6 GB of
+# memory, so anything with less than 8 GB will be killed when the model loads. This is
+# a paid plan billed while the service exists: suspend or delete it after judging.
 #
-# Two things are deliberately absent and should stay absent:
+# The container runs the API in public mode (WTD_PUBLIC=1, set in the Dockerfile):
+# per-browser job history, per-address rate limits, a queue cap, one-hour retention
+# and no fixture injection. There are no accounts.
 #
-#   * No environment variables. Every VITE_* value is compiled into the public
-#     JavaScript bundle, so none of them may ever carry a DSN, key or token.
-#   * No API base URL. A page served from onrender.com must never try to reach
-#     http://127.0.0.1 - that address belongs to the visitor's machine, not to any
-#     server. With no base configured the connection check simply fails, the
-#     interface shows its connection banner, and the visitor chooses the sample
-#     explicitly. A failed live request never becomes a silent sample success.
-#
-# Verified against this repository: the frontend lives in `frontend/`, its
-# package.json defines a `build` script, and vite.config.js does not override
-# build.outDir, so Vite's default `dist` is correct.
+# No secrets here. SENTRY_DSN, if wanted, is added in the dashboard, never in this file.
 
 services:
   - type: web
-    runtime: static
-    name: what-the-doc-demo
-    rootDir: frontend
-    buildCommand: npm ci && npm run build
-    staticPublishPath: dist
+    runtime: docker
+    name: what-the-doc
+    plan: 4c-8g
+    region: oregon
+    dockerfilePath: ./Dockerfile
+    dockerContext: .
+    healthCheckPath: /api/health
+    autoDeploy: false
     pullRequestPreviewsEnabled: false
-    routes:
-      # The interface uses client-side routing. Without this, a refresh on any route
-      # other than / returns 404 from the static host.
-      - type: rewrite
-        source: /*
-        destination: /index.html
-    headers:
-      - path: /*
-        name: X-Content-Type-Options
-        value: nosniff
-      - path: /*
-        name: Referrer-Policy
-        value: no-referrer
+    envVars:
+      - key: GEMMA_MODEL
+        value: gemma4:e2b

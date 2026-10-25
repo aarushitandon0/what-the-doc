@@ -25,11 +25,14 @@ Four properties are the reason this file exists rather than a second repair engi
     record the user's complaint, as it does for the CLI; that is a file in the work
     directory, not a log line.)
 
-Not provided here, deliberately: authentication, rate limiting, a database, any
-network egress, and any sandbox around LibreOffice. This binds to 127.0.0.1 and is a
-local development service. See API.md.
+Not provided here, deliberately: authentication, a database, any network egress, and
+any sandbox around LibreOffice. By default this binds to 127.0.0.1 as a local service.
+`--public` (WTD_PUBLIC=1) is the hosted-demo mode: visitor-scoped job history, rate
+limits, a queue cap and a retention sweep, still without accounts. See API.md and
+DEPLOYMENT.md.
 """
 import argparse
+import contextvars
 import logging
 import os
 import re
@@ -37,6 +40,7 @@ import secrets
 import shutil
 import threading
 import time
+from collections import defaultdict, deque
 from concurrent.futures import ThreadPoolExecutor
 from functools import wraps
 from pathlib import Path
@@ -45,6 +49,7 @@ from fastapi import Body, FastAPI, File, HTTPException, Path as PathParam, Uploa
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 import diagnosis
 import engine
@@ -116,6 +121,69 @@ INVALID_STATE = 'invalid_state'
 CANDIDATE_INTEGRITY_FAILED = 'candidate_integrity_failed'
 FIXTURE_MODE_DISABLED = 'fixture_mode_disabled'
 NO_DOCUMENT_REPAIR = 'no_document_repair'
+RATE_LIMITED = 'rate_limited'
+BUSY = 'busy'
+
+
+# ---------------------------------------------------------------------------
+# Public mode: a hosted demo without accounts
+# ---------------------------------------------------------------------------
+# There is no login. What public mode adds instead:
+#   * each browser sends a random visitor key (X-WTD-Visitor) and the job list shows
+#     only that key's jobs. Every document and job id is still a 128-bit random value,
+#     so nobody can open another visitor's file without being given its id;
+#   * uploads and jobs are rate limited per client address;
+#   * at most PUBLIC_MAX_PENDING jobs wait at once, beyond which a new job is refused
+#     with `busy` instead of queueing behind many minutes of inference;
+#   * documents and jobs are deleted after PUBLIC_RETENTION_SECONDS;
+#   * fixture injection is always off.
+# It does not sandbox LibreOffice. The host's container boundary is all there is.
+VISITOR_HEADER = 'x-wtd-visitor'
+VISITOR_PATTERN = re.compile(r'^[0-9a-f]{32}$')
+_visitor = contextvars.ContextVar('wtd_visitor', default=None)
+
+
+def _env_int(name, default):
+    try:
+        return int(os.environ.get(name, default))
+    except ValueError:
+        return default
+
+
+PUBLIC_RETENTION_SECONDS = _env_int('WTD_RETENTION_SECONDS', 3600)
+PUBLIC_MAX_PENDING = _env_int('WTD_MAX_PENDING', 3)
+# (requests, window in seconds) per client address.
+PUBLIC_LIMITS = {'upload': (_env_int('WTD_UPLOADS_PER_HOUR', 30), 3600),
+                 'job': (_env_int('WTD_JOBS_PER_HOUR', 20), 3600)}
+
+
+class RateLimiter:
+    """Sliding-window counter per (bucket, client). In memory; a restart forgets it."""
+
+    def __init__(self, limits):
+        self.limits = limits
+        self.hits = defaultdict(deque)
+        self.lock = threading.Lock()
+
+    def allow(self, bucket, client, now=None):
+        limit, window = self.limits[bucket]
+        now = time.time() if now is None else now
+        with self.lock:
+            hits = self.hits[(bucket, client)]
+            while hits and hits[0] <= now - window:
+                hits.popleft()
+            if len(hits) >= limit:
+                return False, int(hits[0] + window - now) + 1
+            hits.append(now)
+            return True, 0
+
+
+def _client_address(request):
+    """The caller's address. Behind a host's proxy that is the first X-Forwarded-For."""
+    forwarded = request.headers.get('x-forwarded-for')
+    if forwarded:
+        return forwarded.split(',')[0].strip()
+    return request.client.host if request.client else 'unknown'
 
 
 # ---------------------------------------------------------------------------
@@ -334,22 +402,103 @@ def _trace_metadata(job):
 # ---------------------------------------------------------------------------
 # Application
 # ---------------------------------------------------------------------------
-def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_workers=1):
-    """Build the app. `allow_fixture_mode` is off unless a developer turns it on."""
+def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_workers=1,
+               public=False, static_dir=None):
+    """Build the app. `allow_fixture_mode` is off unless a developer turns it on.
+
+    `public` turns on the hosted-demo protections described above `RateLimiter`, and
+    forces fixture mode off. `static_dir`, when it holds a built frontend, is served
+    at / so the interface and the API share one origin.
+    """
     observability.initialize()
     store = Store(root or os.environ.get('WTD_API_ROOT') or 'work/api')
     # One worker: CPU inference is the bottleneck and running two at once only makes
     # both slower. Jobs therefore genuinely queue, which is why `queued` is a state.
     executor = ThreadPoolExecutor(max_workers=max_workers, thread_name_prefix='wtd-job')
-    app = FastAPI(title='What the Doc?! local API', version='0.1.0',
-                  description='Local document formatting diagnosis. Not for public exposure.')
+    app = FastAPI(title='What the Doc?! API', version='0.1.0',
+                  description='Document formatting diagnosis.')
     app.state.store = store
-    app.state.allow_fixture_mode = bool(allow_fixture_mode)
+    app.state.public = bool(public)
+    app.state.allow_fixture_mode = bool(allow_fixture_mode) and not public
     app.state.executor = executor
+    app.state.limiter = RateLimiter(PUBLIC_LIMITS)
 
     if allow_origins:
         app.add_middleware(CORSMiddleware, allow_origins=list(allow_origins),
                            allow_methods=['*'], allow_headers=['*'])
+
+    def _pending_jobs():
+        return sum(1 for j in list(store.jobs.values()) if j['state'] in (QUEUED, RUNNING))
+
+    @app.middleware('http')
+    async def _public_guard(request, call_next):
+        """Visitor key, rate limits and the queue cap. A no-op unless public."""
+        if not app.state.public:
+            return await call_next(request)
+        key = (request.headers.get(VISITOR_HEADER) or '').lower()
+        token = _visitor.set(key if VISITOR_PATTERN.match(key) else None)
+        try:
+            if request.method == 'POST':
+                path = request.url.path
+                bucket = ('upload' if path in ('/api/documents', '/api/demo/document')
+                          else 'job' if path == '/api/jobs' else None)
+                if bucket == 'job' and _pending_jobs() >= PUBLIC_MAX_PENDING:
+                    return JSONResponse(status_code=429, headers={'Retry-After': '60'},
+                                        content={'error_code': BUSY, 'detail': (
+                                            'Other people are using the demo right now. '
+                                            'Try again in a minute or two.')})
+                if bucket:
+                    allowed, retry = app.state.limiter.allow(bucket,
+                                                             _client_address(request))
+                    if not allowed:
+                        return JSONResponse(
+                            status_code=429, headers={'Retry-After': str(retry)},
+                            content={'error_code': RATE_LIMITED, 'detail': (
+                                'Too many requests from this address. Try again in '
+                                'about %d minutes.' % max(1, retry // 60))})
+            return await call_next(request)
+        finally:
+            _visitor.reset(token)
+
+    def _sweep(now=None):
+        """Delete documents and finished jobs older than the retention window."""
+        now = time.time() if now is None else now
+        cutoff = now - PUBLIC_RETENTION_SECONDS
+        with store.lock:
+            old_jobs = [k for k, j in store.jobs.items()
+                        if j['created_at'] < cutoff and j['state'] not in (QUEUED, RUNNING)]
+            busy_docs = {j['document_id'] for j in store.jobs.values()
+                         if j['state'] in (QUEUED, RUNNING)}
+            for k in old_jobs:
+                store.jobs.pop(k, None)
+            old_docs = [k for k, d in store.documents.items()
+                        if d.get('uploaded_at', 0) < cutoff and k not in busy_docs]
+            for k in old_docs:
+                store.documents.pop(k, None)
+            live_jobs, live_docs = set(store.jobs), set(store.documents)
+        # Directories on disk with no record (e.g. left from before a restart) go too,
+        # once they are older than the window.
+        for directory, live in ((store.jobs_dir, live_jobs), (store.documents_dir, live_docs)):
+            for entry in directory.iterdir():
+                if entry.name in live:
+                    continue
+                try:
+                    if entry.stat().st_mtime < cutoff:
+                        shutil.rmtree(entry, ignore_errors=True)
+                except OSError:
+                    pass
+        return len(old_jobs), len(old_docs)
+
+    app.state.sweep = _sweep
+    if public:
+        def _sweeper():
+            while True:
+                time.sleep(300)
+                try:
+                    _sweep()
+                except Exception as error:          # pragma: no cover - keep sweeping
+                    log.error('sweep failed type=%s', type(error).__name__)
+        threading.Thread(target=_sweeper, name='wtd-sweep', daemon=True).start()
 
     @app.middleware('http')
     async def _refuse_oversized_body(request, call_next):
@@ -408,6 +557,8 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
                                              and runtime.get('model_installed')),
             'renderer': renderer,
             'fixture_mode_allowed': app.state.allow_fixture_mode,
+            'public_mode': app.state.public,
+            'retention_seconds': PUBLIC_RETENTION_SECONDS if app.state.public else None,
             'note': ('When live_diagnosis_available is false, job creation is refused '
                      'with model_unavailable. No canned answer is ever substituted.'),
         }
@@ -829,6 +980,7 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             'report': None, 'preview_index': None, 'decision': None,
             '_diagnoser': diagnoser,
         }
+        job['visitor'] = _visitor.get()
         with store.lock:
             store.jobs[job_id] = job
         app.state.executor.submit(_run_job, job_id)
@@ -883,6 +1035,7 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             'report': None, 'preview_index': None, 'decision': None,
             '_diagnoser': None,
         }
+        job['visitor'] = _visitor.get()
         with store.lock:
             store.jobs[job_id] = job
         app.state.executor.submit(_run_job, job_id)
@@ -918,7 +1071,13 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
 
     @app.get('/api/jobs')
     def list_jobs():
-        return {'jobs': [_public_job(j) for j in list(store.jobs.values())]}
+        jobs = list(store.jobs.values())
+        if app.state.public:
+            # No accounts: a browser sees only the jobs made with its own visitor key,
+            # and a request without a key sees none.
+            key = _visitor.get()
+            jobs = [j for j in jobs if key and j.get('visitor') == key]
+        return {'jobs': [_public_job(j) for j in jobs]}
 
     @app.get('/api/jobs/{job_id}/preview/{side}/{index}')
     def get_preview(job_id: str = PathParam(...), side: str = PathParam(...),
@@ -1022,6 +1181,11 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
             # A server-chosen name. The uploaded filename never round-trips.
             filename='repaired-%s.docx' % job_id[:12])
 
+    # The built interface, mounted last so every /api route above wins. One origin
+    # means the browser needs no CORS allowance and no API base URL.
+    if static_dir and (Path(static_dir) / 'index.html').is_file():
+        app.mount('/', StaticFiles(directory=str(static_dir), html=True), name='frontend')
+
     return app
 
 
@@ -1090,18 +1254,25 @@ def main(argv=None):
                         help='permit injected diagnoses, labelled mode "fixture"')
     parser.add_argument('--cors', action='append', dest='origins', default=None,
                         help='allow this origin, e.g. http://localhost:5173; repeatable')
+    parser.add_argument('--public', action='store_true',
+                        default=os.environ.get('WTD_PUBLIC') == '1',
+                        help='hosted demo: visitor-scoped job list, rate limits, queue '
+                             'cap, retention sweep, fixture mode off (or WTD_PUBLIC=1)')
+    parser.add_argument('--static', default=os.environ.get('WTD_STATIC_DIR'),
+                        help='serve a built frontend (e.g. frontend/dist) at /')
     args = parser.parse_args(argv)
     logging.basicConfig(level=logging.INFO,
                         format='%(asctime)s %(levelname)s %(name)s %(message)s')
-    if args.host not in ('127.0.0.1', 'localhost', '::1'):
-        log.warning('Binding to %s. This service has no authentication, no rate '
-                    'limiting and no renderer sandbox. Do not expose it publicly.',
-                    args.host)
+    if args.host not in ('127.0.0.1', 'localhost', '::1') and not args.public:
+        log.warning('Binding to %s without --public. This service has no '
+                    'authentication, rate limiting or renderer sandbox.', args.host)
     import uvicorn
     try:
         uvicorn.run(create_app(root=args.root, allow_fixture_mode=args.allow_fixture_mode,
-                              allow_origins=args.origins),
-                    host=args.host, port=args.port, log_level='info')
+                              allow_origins=args.origins, public=args.public,
+                              static_dir=args.static),
+                    host=args.host, port=args.port, log_level='info',
+                    proxy_headers=True, forwarded_allow_ips='*' if args.public else None)
     finally:
         observability.flush()
 
