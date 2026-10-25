@@ -125,6 +125,10 @@ work/
 *.tif
 *.tiff
 
+# The README's diagrams are drawn artwork, not document evidence, so they are
+# exempt from the sweep above. Nothing here is rendered from a real document.
+!docs/diagrams/*.png
+
 # The exception: the interface's own artwork and anything else shipped as a static
 # asset of the app. These are drawn for this project and contain no document content.
 !frontend/public/**
