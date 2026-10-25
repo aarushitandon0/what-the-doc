@@ -370,7 +370,7 @@ Only the selected section's id is shown to the model. A diagnosis naming any oth
 section — even a real, eligible one — is refused as a fabrication, exactly as an
 unsupplied break id is.
 
-### Whole document: unwanted page breaks — `scope: "document"`
+### Whole document: unwanted page breaks or misaligned paragraphs — `scope: "document"`
 
 ```json
 {"document_id": "…", "scope": "document",
@@ -385,6 +385,17 @@ same `engine.validate`, preservation invariants, render and human acceptance as 
 other job. The job carries `scope: "document"`, `paragraph_id` is the first paragraph
 touched, and `kept_breaks` lists each break of that kind that stays, with the reason
 (inside a hyperlink, inside a table, …).
+
+The same option answers an alignment complaint ("these paragraphs aren't aligned like
+the others"): every paragraph whose alignment is set **directly** and differs from at
+least 75% of its same-style peers (3 or more) is set to the peers' value, in one
+candidate (`precheck.misaligned_paragraphs`). For a *single* paragraph the same test
+runs before the model (`precheck.peer_alignment`); when it does not clearly apply, the
+model is asked as before. Live evaluation (`use_precheck=False`) never uses either rule.
+
+A page break inside a `w:hyperlink` is removable: the link only wraps ordinary runs, and
+the engine's run-by-run check confirms nothing but the `w:br` changed. Breaks in tables,
+fields, smart tags and other wrappers stay listed and refused.
 
 Any other complaint (including asking to *add* a break) is refused before a job exists
 with **422 `no_document_repair`**; the client then checks paragraph by paragraph.

@@ -136,7 +136,7 @@ def main():
          what_is_wrong='Body paragraph 2 holds two explicit page breaks with text '
                        'either side of each. Paragraph 3 holds a deliberate one. '
                        'Paragraph 4 holds a line break and a lastRenderedPageBreak, '
-                       'neither removable. A hyperlink and a table cell each hold a '
+                       'neither removable. A smart tag and a table cell each hold a '
                        'page break in an unsupported context.',
          select_in_ui=['Paragraph 2 in the outline, then the specific break in the '
                        'break list - the nearby text tells the two apart'],

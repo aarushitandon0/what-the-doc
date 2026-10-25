@@ -193,7 +193,7 @@
     {
       "title": "Explicit page breaks, including ones that cannot be removed",
       "repair_kind": "remove_explicit_break",
-      "what_is_wrong": "Body paragraph 2 holds two explicit page breaks with text either side of each. Paragraph 3 holds a deliberate one. Paragraph 4 holds a line break and a lastRenderedPageBreak, neither removable. A hyperlink and a table cell each hold a page break in an unsupported context.",
+      "what_is_wrong": "Body paragraph 2 holds two explicit page breaks with text either side of each. Paragraph 3 holds a deliberate one. Paragraph 4 holds a line break and a lastRenderedPageBreak, neither removable. A smart tag and a table cell each hold a page break in an unsupported context.",
       "select_in_ui": [
         "Paragraph 2 in the outline, then the specific break in the break list - the nearby text tells the two apart"
       ],
@@ -205,12 +205,12 @@
       "status": "verified",
       "status_detail": "Rendered demonstration run this session: 6 pages to 5, 5 breaks to 4, text identical, 12 of 12 invariants passed. See TEST_RESULTS.md section 14.",
       "file": "03-manual-page-break.docx",
-      "sha256": "fb4fca347ebfce5334f8686f881ea7bcf57b2a26e8294db38197411760abb01e",
-      "bytes": 2749,
+      "sha256": "060cb52839e1f1cd4e35fbd602115bcd71da7960143ac02867444e9c82c91066",
+      "bytes": 2760,
       "paragraph_count": 9,
       "breaks": [
         {
-          "target_id": "brk-849af3bc0798d816",
+          "target_id": "brk-9c7f8eb81ffd7fc3",
           "break_type": "page",
           "paragraph_id": 2,
           "ordinal_in_paragraph": 1,
@@ -220,7 +220,7 @@
           "ineligible_reason": null
         },
         {
-          "target_id": "brk-2d774941075c438d",
+          "target_id": "brk-745352e42d531d2c",
           "break_type": "page",
           "paragraph_id": 2,
           "ordinal_in_paragraph": 2,
@@ -230,7 +230,7 @@
           "ineligible_reason": null
         },
         {
-          "target_id": "brk-5f5bd30ba08e6948",
+          "target_id": "brk-489ecb28ba2ce733",
           "break_type": "page",
           "paragraph_id": 3,
           "ordinal_in_paragraph": 1,
@@ -240,7 +240,7 @@
           "ineligible_reason": null
         },
         {
-          "target_id": "brk-99512bab4275f0cb",
+          "target_id": "brk-ebf6fb13e9cc6330",
           "break_type": "textWrapping",
           "paragraph_id": 4,
           "ordinal_in_paragraph": 1,
@@ -260,14 +260,14 @@
           "ineligible_reason": "w:lastRenderedPageBreak records where the application that last paginated this document placed a page break. It is not a user-inserted break, so removing it would repair nothing."
         },
         {
-          "target_id": "brk-f0330d31f3d116ea",
+          "target_id": "brk-e6ea7cc30041da6c",
           "break_type": "page",
           "paragraph_id": 5,
           "ordinal_in_paragraph": 1,
           "edit_eligible": false,
           "text_before": "",
           "text_after": "An unsupported context.",
-          "ineligible_reason": "The break sits inside <w:hyperlink> rather than directly in a top-level body paragraph, so this version will not edit it."
+          "ineligible_reason": "The break sits inside <w:smartTag> rather than directly in a top-level body paragraph, so this version will not edit it."
         },
         {
           "target_id": null,
@@ -282,7 +282,7 @@
       ],
       "sections": [
         {
-          "target_id": "sec-54518441c0bded5c",
+          "target_id": "sec-8f282466a5135835",
           "section_index": 0,
           "defined_in": "body",
           "governs": "the final section of the document",
@@ -302,11 +302,11 @@
           "two_breaks_paragraph": 2,
           "deliberate_break_paragraph": 3,
           "line_break_paragraph": 4,
-          "hyperlink_paragraph": 5,
+          "unsupported_wrapper_paragraph": 5,
           "first_trailing_paragraph": 6
         },
         "removable_page_breaks": 3,
-        "note": "Two page breaks in body paragraph 2, one deliberate break in body paragraph 3, a line break and a lastRenderedPageBreak in body paragraph 4, and two unsupported contexts (a hyperlink and a table cell). Only the first three are removable."
+        "note": "Two page breaks in body paragraph 2, one deliberate break in body paragraph 3, a line break and a lastRenderedPageBreak in body paragraph 4, and two unsupported contexts (a smart tag and a table cell). Only the first three are removable."
       }
     },
     {
@@ -378,7 +378,7 @@
       "repair_kind": "change_section_start",
       "what_is_wrong": "The document has two sections with identical page setup. The second starts on a new page. Nothing is necessarily wrong with that - this is the one case the new operation supports, if you ask for it.",
       "select_in_ui": [
-        "Any paragraph, then \"Section 2 \u00b7 starts nextPage\" in the SECTIONS panel. Section 1 is not selectable and says why."
+        "Any paragraph, then \"Section 2 · starts nextPage\" in the SECTIONS panel. Section 1 is not selectable and says why."
       ],
       "complaints": [
         "The second part should carry on down the same page instead of starting a new one."

@@ -6,6 +6,9 @@ import * as api from './api';
 
 /* The live review heading names the kind of change actually under review; the
  * spacing line belongs to the bundled spacing sample only. */
+/* A whole-document repair can change several things of one kind at once. */
+const documentHeadline=(kind,n)=>kind==='explicit_break_removal'?`${n} break${n===1?'':'s'} removed.`
+ :`${n} paragraph${n===1?'':'s'} realigned.`;
 const reviewHeadline={paragraph_property:'One paragraph setting changed.',explicit_break_removal:'One break removed.',section_start_change:'One section start changed.'};
 const pageCount=(n)=>n==null?'? pages':`${n} page${n===1?'':'s'}`;
 export default function App(){
@@ -456,7 +459,7 @@ export default function App(){
    <aside className="inspector">{liveInspector()}</aside></div></>;
 
  const liveReview=()=>['awaiting_review','accepted','rejected'].includes(job?.state)
-  ?<><div className="review-heading"><div><a className="backlink" href="#workspace"><ArrowLeft/> Back to workspace</a><h1>Same words.<br/><span>{job.scope==='document'?`${proposalRows.length} break${proposalRows.length===1?'':'s'} removed.`:reviewHeadline[job.operation_kind]||'One reviewed change.'}</span></h1>
+  ?<><div className="review-heading"><div><a className="backlink" href="#workspace"><ArrowLeft/> Back to workspace</a><h1>Same words.<br/><span>{job.scope==='document'?documentHeadline(job.operation_kind,proposalRows.length):reviewHeadline[job.operation_kind]||'One reviewed change.'}</span></h1>
      <p>{job.diagnosis?.explanation}</p><ModeBadge job={job}/></div>
     <div className="segmented" aria-label="Comparison view">{[['side','Side by side'],['original','Original'],['proposed','Proposed']].map(([v,t])=><button key={v} aria-pressed={view===v} onClick={()=>setView(v)}>{t}</button>)}</div></div>
    <ApiErrorNote error={apiError} onDismiss={()=>setApiError(null)}/>

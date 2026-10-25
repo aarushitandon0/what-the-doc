@@ -191,3 +191,131 @@ def unwanted_page_breaks(source, complaint):
         'evidence_duplicates_removed': 0,
     }
     return found, kept
+
+
+# ---------------------------------------------------------------------------
+# "This paragraph is not aligned like the others"
+# ---------------------------------------------------------------------------
+# Measured on a real upload: one body paragraph centred by direct formatting among
+# sixteen justified paragraphs of the same style. The model's answer was discarded
+# (it repeated a citation), so the person got nothing for the plainest fault there is.
+# When the document itself is that unambiguous, no model is needed: the paragraph's
+# own setting is direct, its same-style peers overwhelmingly agree on another value,
+# and the repair is to match them. Anything less clear-cut returns None and the model
+# decides, exactly as before. Still only a proposal, reviewed by a person.
+
+ALIGNMENT_RULE = 'peer_alignment'
+MIN_ALIGNMENT_PEERS = 3
+MIN_ALIGNMENT_AGREEMENT = 0.75
+_ALIGN = re.compile(r'(align|centre|center|centred|centered|justif|ragged|'
+                    r'flush (left|right)|left-aligned|right-aligned)')
+_ALIGN_NAMES = {'left': 'left-aligned', 'center': 'centred', 'right': 'right-aligned',
+                'both': 'justified', None: 'left-aligned (Word default)'}
+
+
+def _is_alignment_complaint(complaint):
+    return bool(_ALIGN.search((complaint or '').lower()))
+
+
+def _alignment_outlier(records, paragraph_id):
+    """(peer value, peer count, agreeing count) when this paragraph is an outlier."""
+    me = records[paragraph_id]
+    own = me['effective_properties'].get('alignment') or {}
+    if own.get('origin') != 'direct' or not (me.get('text') or '').strip():
+        return None
+    peers = [r for r in records if r['paragraph_id'] != paragraph_id
+             and r['style_id'] == me['style_id'] and (r.get('text') or '').strip()]
+    if len(peers) < MIN_ALIGNMENT_PEERS:
+        return None
+    counts = {}
+    for r in peers:
+        value = (r['effective_properties'].get('alignment') or {}).get('value')
+        counts[value] = counts.get(value, 0) + 1
+    value, agreeing = max(counts.items(), key=lambda kv: kv[1])
+    if value is None or value == own.get('value') \
+            or agreeing / len(peers) < MIN_ALIGNMENT_AGREEMENT:
+        return None
+    return value, len(peers), agreeing
+
+
+def _alignment_diagnosis(inspection, outliers):
+    """One proposed diagnosis for {paragraph_id: (value, peers, agreeing)}."""
+    records = inspection['paragraphs']
+    parts = []
+    for pid, (value, peers, agreeing) in sorted(outliers.items()):
+        own = records[pid]['effective_properties']['alignment'].get('value')
+        parts.append('paragraph %d is %s while %d of the other %d %s paragraphs are %s'
+                     % (pid, _ALIGN_NAMES.get(own, own), agreeing, peers,
+                        records[pid]['style_id'] or 'unstyled',
+                        _ALIGN_NAMES.get(value, value)))
+    joined = '; '.join(parts)
+    explanation = ('%s. Its alignment is set directly on the paragraph, so this sets it '
+                   'to match the others. Only the alignment changes.'
+                   % (joined[:1].upper() + joined[1:]))
+    if len(explanation) > 380:
+        explanation = ('%d paragraphs have alignment set directly that differs from '
+                       'almost every other paragraph of the same style. This sets each '
+                       'to match its peers. Only the alignment changes.' % len(outliers))
+    return {
+        'status': 'proposed',
+        'explanation': explanation,
+        'evidence': [{'paragraph_id': pid, 'field': 'alignment'}
+                     for pid in sorted(outliers)],
+        'source_sha256': inspection['source_sha256'],
+        'operations': [{'paragraph_id': pid, 'field': 'alignment', 'value': v[0]}
+                       for pid, v in sorted(outliers.items())],
+        'question': None,
+        'evidence_duplicates_removed': 0,
+    }
+
+
+def peer_alignment(source, paragraph_id, complaint, break_target_id=None,
+                   section_target_id=None):
+    """A validated proposal for one clearly misaligned paragraph, or None."""
+    if break_target_id or section_target_id or not _is_alignment_complaint(complaint):
+        return None
+    inspection = engine.inspect(source)
+    records = inspection['paragraphs']
+    if not 0 <= paragraph_id < len(records):
+        return None
+    found = _alignment_outlier(records, paragraph_id)
+    if found is None:
+        return None
+    raw = _alignment_diagnosis(inspection, {paragraph_id: found})
+    raw.pop('evidence_duplicates_removed')
+    # The same validator a model answer goes through, so the shape cannot drift.
+    return diagnosis.check(raw, paragraph_id, inspection['source_sha256'],
+                           {paragraph_id})
+
+
+def misaligned_paragraphs(source, complaint):
+    """Whole document: one proposal fixing every clearly misaligned paragraph, or None."""
+    if not _is_alignment_complaint(complaint):
+        return None
+    inspection = engine.inspect(source)
+    records = inspection['paragraphs']
+    outliers = {}
+    for record in records:
+        found = _alignment_outlier(records, record['paragraph_id'])
+        if found is not None:
+            outliers[record['paragraph_id']] = found
+        if len(outliers) == MAX_DOCUMENT_BREAK_REMOVALS:
+            break
+    if not outliers:
+        return None
+    return _alignment_diagnosis(inspection, outliers)
+
+
+def document_repair(source, complaint):
+    """(diagnosis, kept, rule) for a whole-document complaint, or None.
+
+    Breaks first, because a complaint naming page breaks is about breaks even if it
+    also says "aligned"; then alignment.
+    """
+    found = unwanted_page_breaks(source, complaint)
+    if found is not None:
+        return found[0], found[1], DOCUMENT_BREAKS_RULE
+    found = misaligned_paragraphs(source, complaint)
+    if found is not None:
+        return found, [], ALIGNMENT_RULE
+    return None

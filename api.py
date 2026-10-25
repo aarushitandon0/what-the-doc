@@ -836,10 +836,11 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
         return _public_job(job)
 
     def _create_document_job(payload, document_id, record):
-        """Queue one whole-document repair: every unwanted page or column break at once.
+        """Queue one whole-document repair, answered by a fixed rule in one candidate:
+        every unwanted page or column break, or every clearly misaligned paragraph.
 
-        Answered by precheck.unwanted_page_breaks, not the model, and only for that one
-        complaint. Anything else is refused with `no_document_repair` *before* a job
+        Answered by precheck.document_repair, not the model, and only for those two
+        complaints. Anything else is refused with `no_document_repair` *before* a job
         exists, so the client can fall back to checking paragraph by paragraph. The job
         then runs the same pipeline: validation, invariants, render, human review.
         """
@@ -859,13 +860,14 @@ def create_app(root=None, allow_fixture_mode=False, allow_origins=None, max_work
                            'A whole-document repair takes no break, section or '
                            'injected diagnosis')
         with observability.span('structure.inspect'):
-            ruled = precheck.unwanted_page_breaks(store.document_path(document_id),
-                                                  complaint)
+            ruled = precheck.document_repair(store.document_path(document_id),
+                                             complaint)
         if ruled is None:
             raise ApiError(422, NO_DOCUMENT_REPAIR,
                            'No whole-document repair applies: it is offered only for '
-                           'unwanted page or column breaks that this version can '
-                           'remove. Check paragraph by paragraph instead.')
+                           'unwanted page or column breaks, and for paragraphs whose '
+                           'alignment clearly differs from the rest of their style. '
+                           'Check paragraph by paragraph instead.')
         first = min(op['paragraph_id'] for op in ruled[0]['evidence'])
         job_id = store.new_id()
         job = {

@@ -97,9 +97,10 @@ MANUAL_PAGE_BREAK_BODY = [
     paragraph(run('A line break follows this sentence.'),
               run('And pagination was recorded here.',
                   before=LINE_BREAK + LAST_RENDERED)),
-    # A page break inside a hyperlink: a descendant of a body paragraph, but not
-    # supported content. Eligibility has to come from the real structure.
-    '<w:p><w:hyperlink w:anchor="top">%s</w:hyperlink></w:p>'
+    # A page break inside a smart tag: a descendant of a body paragraph, but not
+    # supported content. Eligibility has to come from the real structure. (A
+    # hyperlink was used here until hyperlinks became a supported wrapper.)
+    '<w:p><w:smartTag w:uri="urn:x" w:element="place">%s</w:smartTag></w:p>'
     % run('An unsupported context.', before=PAGE_BREAK),
     # A page break inside a table cell: also a descendant, and not a body paragraph
     # at all, so it never appears in the body-paragraph list.
@@ -120,7 +121,7 @@ MANUAL_PAGE_BREAK_IDS = {
     'two_breaks_paragraph': 2,
     'deliberate_break_paragraph': 3,
     'line_break_paragraph': 4,
-    'hyperlink_paragraph': 5,
+    'unsupported_wrapper_paragraph': 5,
     'first_trailing_paragraph': 6,
 }
 
@@ -164,7 +165,7 @@ def build_manual_page_break(path):
         'removable_page_breaks': 3,
         'note': 'Two page breaks in body paragraph 2, one deliberate break in body '
                 'paragraph 3, a line break and a lastRenderedPageBreak in body '
-                'paragraph 4, and two unsupported contexts (a hyperlink and a table '
+                'paragraph 4, and two unsupported contexts (a smart tag and a table '
                 'cell). Only the first three are removable.'}
 
 

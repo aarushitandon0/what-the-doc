@@ -152,21 +152,28 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
     started = time.monotonic()
     ruled = None
     if scope == 'document':
-        found_rule = precheck.unwanted_page_breaks(source, complaint)
+        found_rule = precheck.document_repair(source, complaint)
         if found_rule is None:
             return fail(diagnosis.INVALID_SELECTION,
                         'A whole-document repair is only offered for unwanted page or '
-                        'column breaks, and this document has none this version can '
-                        'remove.')
-        found, kept = found_rule
+                        'column breaks and clearly misaligned paragraphs, and this '
+                        'document has none this version can repair.')
+        found, kept, rule = found_rule
         report['answered_by'] = 'rule'
         report['kept_breaks'] = kept
         report['diagnosis'] = found
         report['diagnosis_metadata'] = {
-            'model': None, 'rule': precheck.DOCUMENT_BREAKS_RULE, 'answered_by': 'rule',
+            'model': None, 'rule': rule, 'answered_by': 'rule',
             'latency_seconds': round(time.monotonic() - started, 3),
             'attempts': 0, 'max_attempts': 0, 'discarded_attempts': []}
         stage('diagnosed')
+    elif live_model and use_precheck and _aligned_by_rule(
+            report, source, paragraph_id, complaint, break_target_id,
+            section_target_id, started):
+        # A paragraph whose direct alignment contradicts nearly all its same-style
+        # peers: proposed without the model, then validated and reviewed as usual.
+        stage('diagnosed')
+        found = report['diagnosis']
     elif live_model and use_precheck:
         # A deterministic check for the one situation the model measurably gets wrong:
         # a spacing complaint about a paragraph that has no spacing of its own. It can
@@ -190,7 +197,7 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
                           'nothing of its own to repair. No candidate exists.')
         stage(ruled['status'])
         return _finish(report, work_dir)
-    if scope != 'document':
+    if report['diagnosis'] is None:
         try:
             with observability.span('diagnosis.execute') as trace:
                 found, metadata = diagnoser(source, complaint, paragraph_id)
@@ -288,6 +295,25 @@ def _run(source, paragraph_id, complaint, work_dir, diagnoser=None, mode=LIVE,
                       'step. The original file is untouched and is the undo path.')
     stage(AWAITING_REVIEW)
     return _finish(report, work_dir)
+
+
+def _aligned_by_rule(report, source, paragraph_id, complaint, break_target_id,
+                     section_target_id, started):
+    """Fill the report from precheck.peer_alignment and return True, or return False."""
+    try:
+        found = precheck.peer_alignment(source, paragraph_id, complaint,
+                                        break_target_id, section_target_id)
+    except Exception:                                  # pragma: no cover - defensive
+        return False
+    if found is None:
+        return False
+    report['answered_by'] = 'rule'
+    report['diagnosis'] = found
+    report['diagnosis_metadata'] = {
+        'model': None, 'rule': precheck.ALIGNMENT_RULE, 'answered_by': 'rule',
+        'latency_seconds': round(time.monotonic() - started, 3),
+        'attempts': 0, 'max_attempts': 0, 'discarded_attempts': []}
+    return True
 
 
 def _finish(report, work_dir):

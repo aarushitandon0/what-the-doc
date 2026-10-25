@@ -19,7 +19,7 @@ page break. Four things that are routinely confused are kept apart here:
 
 **Eligibility is derived, not assumed.** A `w:br` is only offered for removal when its
 run is a *direct child of a top-level body paragraph*. A break inside a table cell, a
-text box, a hyperlink, a field or any other wrapper is reported with the element that
+text box, a field, a smart tag or any other wrapper (a hyperlink excepted) is reported with the element that
 disqualifies it, because "it is a descendant of a body paragraph" is not the same claim
 as "it belongs to supported body content".
 
@@ -60,6 +60,8 @@ BREAK_TYPES = ('page', 'column', 'textWrapping')
 DEFAULT_BREAK_TYPE = 'textWrapping'
 # Only these two are user-inserted breaks this version can remove.
 REMOVABLE_BREAK_TYPES = ('page', 'column')
+# Elements a removable break's run may sit inside, directly under a body paragraph.
+SUPPORTED_RUN_WRAPPERS = ('hyperlink',)
 
 # ST_SectionMark. 'nextPage' is the schema default when w:type is absent.
 SECTION_START_TYPES = ('nextPage', 'nextColumn', 'continuous', 'evenPage', 'oddPage')
@@ -128,13 +130,19 @@ def target_id(source_sha256, paragraph_id, run_index, break_index, break_type):
 def _disqualifying_ancestor(element, paragraph):
     """The element that puts `element` outside supported body content, or None.
 
-    Walks from the break up to the paragraph. Supported shape is exactly
-    w:p > w:r > w:br: anything else between them is named and reported.
+    Walks from the break up to the paragraph. Supported shapes are w:p > w:r > w:br
+    and w:p > w:hyperlink > w:r > w:br: a hyperlink only wraps ordinary runs in a
+    link, and removing a w:br inside one leaves the link, its target and its text
+    untouched (engine._verify_break_removal checks every run, linked or not). Anything
+    else - a field, content control, text box, smart tag - is named and reported.
     """
     parent = element.getparent()
     if parent is None or _local(parent) != 'r':
         return _local(parent) if parent is not None else 'detached'
     run_parent = parent.getparent()
+    if run_parent is not None and _local(run_parent) in SUPPORTED_RUN_WRAPPERS \
+            and run_parent.getparent() is paragraph:
+        return None
     if run_parent is not paragraph:
         return _local(run_parent) if run_parent is not None else 'detached'
     return None

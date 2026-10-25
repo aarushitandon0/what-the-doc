@@ -97,14 +97,40 @@ class InspectionTest(BreakFixtureCase):
         self.assertFalse(rendered[0]['edit_eligible'])
         self.assertIn('not a user-inserted break', rendered[0]['ineligible_reason'])
 
-    def test_break_inside_a_hyperlink_is_ineligible_and_names_the_element(self):
+    def test_break_inside_an_unsupported_wrapper_is_ineligible_and_names_it(self):
         inside = [b for b in self.breaks()['breaks']
                   if b['paragraph_id'] == break_fixtures.MANUAL_PAGE_BREAK_IDS[
-                      'hyperlink_paragraph']]
+                      'unsupported_wrapper_paragraph']]
         self.assertEqual(len(inside), 1)
         self.assertEqual(inside[0]['break_type'], 'page')
         self.assertFalse(inside[0]['edit_eligible'])
-        self.assertIn('w:hyperlink', inside[0]['ineligible_reason'])
+        self.assertIn('w:smartTag', inside[0]['ineligible_reason'])
+
+    def test_break_inside_a_hyperlink_is_removable_and_nothing_else_changes(self):
+        # A hyperlink only wraps ordinary runs; the link, its target and its text
+        # must all survive the removal.
+        root = engine.open_package(self.page_doc).document
+        paragraph = engine.paras(root)[1]
+        link = E.SubElement(paragraph, engine.q('hyperlink'))
+        link.set(engine.q('anchor'), 'top')
+        run = E.SubElement(link, engine.q('r'))
+        E.SubElement(run, engine.q('br')).set(engine.q('type'), 'page')
+        E.SubElement(run, engine.q('t')).text = 'Linked text.'
+        linked = _write_document(self.page_doc, self.dir / 'hyperlinked.docx', root)
+        record, = [b for b in engine.inspect_breaks(linked)['breaks']
+                   if b['paragraph_id'] == 1]
+        self.assertTrue(record['edit_eligible'], record['ineligible_reason'])
+        plan = {'source_sha256': engine.signature(linked), 'schema_version': 2,
+                'operations': [{'operation': engine.REMOVE_BREAK,
+                                'target_id': record['target_id'],
+                                'expected_break_type': 'page'}]}
+        out = self.dir / 'hyperlinked-out.docx'
+        engine.apply(linked, out, plan)
+        after = engine.open_package(out).document
+        link_after = engine.paras(after)[1].find(engine.q('hyperlink'))
+        self.assertEqual(link_after.get(engine.q('anchor')), 'top')
+        self.assertIsNone(link_after.find('.//' + engine.q('br')))
+        self.assertEqual(''.join(link_after.itertext()), 'Linked text.')
 
     def test_break_inside_a_table_cell_is_listed_and_never_a_target(self):
         # The cell's paragraph is not a top-level body paragraph, so it has no
@@ -172,7 +198,7 @@ class InspectionTest(BreakFixtureCase):
     def test_an_ineligible_break_continues_the_same_ordinal_sequence(self):
         root = engine.open_package(self.page_doc).document
         paragraph = engine.paras(root)[2]
-        link = E.SubElement(paragraph, engine.q('hyperlink'))
+        link = E.SubElement(paragraph, engine.q('smartTag'))
         run = E.SubElement(link, engine.q('r'))
         E.SubElement(run, engine.q('br')).set(engine.q('type'), 'page')
         mixed = _write_document(self.page_doc, self.dir / 'mixed-eligibility.docx', root)
@@ -335,11 +361,11 @@ class ValidationTest(BreakFixtureCase):
             self.validate(plan, self.column_doc)
 
     def test_an_ineligible_context_is_refused_with_its_reason(self):
-        hyperlinked = [b for b in self.breaks()['breaks']
-                       if b['target_id'] and not b['edit_eligible']
-                       and b['break_type'] == 'page'][0]
-        plan = self.plan(hyperlinked)
-        with self.assertRaisesRegex(ValueError, 'w:hyperlink'):
+        wrapped = [b for b in self.breaks()['breaks']
+                   if b['target_id'] and not b['edit_eligible']
+                   and b['break_type'] == 'page'][0]
+        plan = self.plan(wrapped)
+        with self.assertRaisesRegex(ValueError, 'w:smartTag'):
             self.validate(plan)
 
     def test_a_line_break_cannot_be_targeted(self):
